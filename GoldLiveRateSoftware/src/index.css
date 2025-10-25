@@ -1,0 +1,24 @@
+@import "tailwindcss";
+
+
+@font-face {
+  font-family: "Aparajita";
+  src: local("Aparajita"), 
+       url("/fonts/Aparajita-Regular.woff2") format("woff2"),
+       url("/fonts/Aparajita-Regular.woff") format("woff");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Aparajita";
+  src: local("Aparajita Bold"),
+       url("/fonts/Aparajita-Bold.woff2") format("woff2"),
+       url("/fonts/Aparajita-Bold.woff") format("woff");
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}
+
+/* optional: set as site default */
+/* html { font-family: "Aparajita", system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans Devanagari", sans-serif; } */
