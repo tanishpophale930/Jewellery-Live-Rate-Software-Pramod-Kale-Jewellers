@@ -56,7 +56,7 @@ export default function GoldLiveRatesComponent({
   const stalenessIntervalRef = useRef(null)
   const blinkTimeoutGoldCoinRef = useRef(null)
   const blinkTimeoutDollarRef = useRef(null)
-  const LIVE_DISPLAY_MS = 3000 // how long to show "Live" after a change
+  const LIVE_DISPLAY_MS = 3000 // how long to show "Live" after a change (kept, but status now relies on lastChange)
   // ------------------------------------------------------------------
 
   // NEW: show/hide making input when clicking the logo
@@ -162,6 +162,13 @@ export default function GoldLiveRatesComponent({
 
   // ------------------------------------------------------
 
+  // ---------- NEW: last-change tracker for Live/Stable logic ----------
+  // If none of the monitored values change for this duration -> Stable
+  const CHANGE_STABLE_MS = 60 * 60 * 1000 // 1 hour
+  const lastChangeRef = useRef(null)
+  const stableTimeoutRef = useRef(null)
+  // -------------------------------------------------------------------
+
   function clearSchedules() {
     if (timeoutRef.current) {
       clearTimeout(timeoutRef.current)
@@ -194,6 +201,20 @@ export default function GoldLiveRatesComponent({
       fetchRate(controllerRef.current?.signal)
     }, ms)
     startCountdown(ms)
+  }
+
+  // helper used elsewhere for blink (kept)
+  const triggerBlink = (prevVal, curVal, setBlinkFn, timeoutRefLocal) => {
+    if (!Number.isFinite(prevVal) || !Number.isFinite(curVal)) return
+    if (curVal > prevVal) {
+      setBlinkFn('up')
+      if (timeoutRefLocal.current) clearTimeout(timeoutRefLocal.current)
+      timeoutRefLocal.current = setTimeout(() => setBlinkFn(null), BLINK_MS)
+    } else if (curVal < prevVal) {
+      setBlinkFn('down')
+      if (timeoutRefLocal.current) clearTimeout(timeoutRefLocal.current)
+      timeoutRefLocal.current = setTimeout(() => setBlinkFn(null), BLINK_MS)
+    }
   }
 
   async function fetchRate(signal, nextMs = null) {
@@ -249,35 +270,81 @@ export default function GoldLiveRatesComponent({
 
       const numericGold = Number(extracted)
 
-      // ---------- NEW: blinking logic for main gold rate (24K 10gm) ----------
-      // compare with previous before updating previousRateRef
-      const prev = previousRateRef.current
-if (Number.isFinite(numericGold) && Number.isFinite(prev)) {
-  if (Number(numericGold) > Number(prev)) {
-    setBlinkRateDir('up')
-    if (blinkTimeoutRateRef.current) clearTimeout(blinkTimeoutRateRef.current)
-    blinkTimeoutRateRef.current = setTimeout(() => setBlinkRateDir(null), BLINK_MS)
-  } else if (Number(numericGold) < Number(prev)) {
-    setBlinkRateDir('down')
-    if (blinkTimeoutRateRef.current) clearTimeout(blinkTimeoutRateRef.current)
-    blinkTimeoutRateRef.current = setTimeout(() => setBlinkRateDir(null), BLINK_MS)
-  }
-}
+      // ---------- NEW: determine if any monitored value changed ----------
+      const prevGold = previousRateRef.current
+      // SILVER (try exact label then fallback)
+      let silverNum = null
+      const silverLineExact = lines.find(l => /SILVER NAGPUR RTGS/i.test(l))
+      if (silverLineExact) {
+        const val = firstNumericAfterLabel(silverLineExact, /SILVER NAGPUR RTGS/i)
+        silverNum = val ? Number(val) : null
+      } else {
+        const silverLineAny = lines.find(l => /\bSILVER\b/i.test(l))
+        if (silverLineAny) {
+          const m = silverLineAny.match(/\d+(?:\.\d+)?/)
+          silverNum = m ? Number(m[0]) : null
+        }
+      }
 
-// ---- helper for derived blinks (moved here so it's available everywhere) ----
-const triggerBlink = (prevVal, curVal, setBlinkFn, timeoutRefLocal) => {
-  if (!Number.isFinite(prevVal) || !Number.isFinite(curVal)) return
-  if (curVal > prevVal) {
-    setBlinkFn('up')
-    if (timeoutRefLocal.current) clearTimeout(timeoutRefLocal.current)
-    timeoutRefLocal.current = setTimeout(() => setBlinkFn(null), BLINK_MS)
-  } else if (curVal < prevVal) {
-    setBlinkFn('down')
-    if (timeoutRefLocal.current) clearTimeout(timeoutRefLocal.current)
-    timeoutRefLocal.current = setTimeout(() => setBlinkFn(null), BLINK_MS)
-  }
-}
-// -----------------------------------------------------------------------------
+      // SPOT GOLD
+      let spotNum = null
+      const spotLineExact = lines.find(l => /SPOT\s*GOLD/i.test(l))
+      if (spotLineExact) {
+        const val = firstNumericAfterLabel(spotLineExact, /SPOT\s*GOLD/i)
+        spotNum = val ? Number(val) : null
+      } else {
+        const spotLineAny = lines.find(l => /\bSPOT\b/i.test(l))
+        if (spotLineAny) {
+          const m = spotLineAny.match(/\d+(?:\.\d+)?/)
+          spotNum = m ? Number(m[0]) : null
+        }
+      }
+
+      // Compare with previous refs to decide whether something actually *changed*
+      let anyValueChanged = false
+      if (Number.isFinite(numericGold) && Number.isFinite(prevGold) && Number(numericGold) !== Number(prevGold)) {
+        anyValueChanged = true
+      }
+      if (Number.isFinite(silverNum) && Number.isFinite(prevSilverRef.current) && Number(silverNum) !== Number(prevSilverRef.current)) {
+        anyValueChanged = true
+      }
+      if (Number.isFinite(spotNum) && Number.isFinite(prevSpotRef.current) && Number(spotNum) !== Number(prevSpotRef.current)) {
+        anyValueChanged = true
+      }
+      // dollar is updated in fetchDollar; it will update lastChangeRef there
+
+      // If anything changed, update lastChangeRef and make status Live and schedule stable after 1 hour of inactivity
+      if (anyValueChanged) {
+        lastChangeRef.current = Date.now()
+        // immediate visual feedback
+        setConnectionStatus('live')
+
+        if (stableTimeoutRef.current) {
+          clearTimeout(stableTimeoutRef.current)
+          stableTimeoutRef.current = null
+        }
+        stableTimeoutRef.current = setTimeout(() => {
+          // after 1 hour of no change, mark stable (if not offline)
+          setConnectionStatus(prev => (prev === 'offline' ? 'offline' : 'stable'))
+          stableTimeoutRef.current = null
+        }, CHANGE_STABLE_MS)
+      }
+
+      // ---------- NEW: blinking logic for main gold rate (24K 10gm) ----------
+      const prev = prevGold
+      if (Number.isFinite(numericGold) && Number.isFinite(prev)) {
+        if (Number(numericGold) > Number(prev)) {
+          setBlinkRateDir('up')
+          if (blinkTimeoutRateRef.current) clearTimeout(blinkTimeoutRateRef.current)
+          blinkTimeoutRateRef.current = setTimeout(() => setBlinkRateDir(null), BLINK_MS)
+        } else if (Number(numericGold) < Number(prev)) {
+          setBlinkRateDir('down')
+          if (blinkTimeoutRateRef.current) clearTimeout(blinkTimeoutRateRef.current)
+          blinkTimeoutRateRef.current = setTimeout(() => setBlinkRateDir(null), BLINK_MS)
+        }
+      }
+
+      // -----------------------------------------------------------------------------
 
       setRate(Number.isFinite(numericGold) ? numericGold : null)
       setLastUpdate(new Date())
@@ -295,19 +362,7 @@ const triggerBlink = (prevVal, curVal, setBlinkFn, timeoutRefLocal) => {
         })
       }
 
-      // connection status logic (unchanged)
-      if (Number.isFinite(numericGold) && (prev === null || !Number.isFinite(prev))) {
-        setConnectionStatus('stable')
-      } else if (Number.isFinite(numericGold) && Number.isFinite(prev) && Number(numericGold) !== Number(prev)) {
-        setConnectionStatus('live')
-        if (liveTimeoutRef.current) clearTimeout(liveTimeoutRef.current)
-        liveTimeoutRef.current = setTimeout(() => {
-          setConnectionStatus('stable')
-          liveTimeoutRef.current = null
-        }, LIVE_DISPLAY_MS)
-      } else {
-        setConnectionStatus('stable')
-      }
+      // connection status: don't forcibly set stable here; staleness logic and lastChangeRef control it
       previousRateRef.current = numericGold
 
       if (!initialized) {
@@ -315,11 +370,7 @@ const triggerBlink = (prevVal, curVal, setBlinkFn, timeoutRefLocal) => {
         setLoading(false)
       }
 
-
-
       // ---------- NEW: blinking for derived carats (10 gm) ----------
-      // Use the already-saved `prev` (previous 24K numeric gold) to derive prior values.
-      // This must use the saved prev (not previousRateRef.current which was updated).
       if (Number.isFinite(numericGold)) {
         // compute derived 10gm values (current)
         const new22 = (numericGold + makingNumber) / 1.1    // 22K 10gm
@@ -328,14 +379,13 @@ const triggerBlink = (prevVal, curVal, setBlinkFn, timeoutRefLocal) => {
         const new16 = (0.85 * numericGold) / 1.1           // 16K 10gm
 
         // IMPORTANT: use the earlier saved `prev` (previous 24K value), not previousRateRef.current
-        const prevGold = prev
-        const prev22 = Number.isFinite(prevGold) ? (prevGold + makingNumber) / 1.1 : null
-        const prev20 = Number.isFinite(prevGold) ? prevGold / 1.1 : null
-        const prev18 = Number.isFinite(prevGold) ? (0.95 * prevGold) / 1.1 : null
-        const prev16 = Number.isFinite(prevGold) ? (0.85 * prevGold) / 1.1 : null
+        const prevGoldLocal = prev
+        const prev22 = Number.isFinite(prevGoldLocal) ? (prevGoldLocal + makingNumber) / 1.1 : null
+        const prev20 = Number.isFinite(prevGoldLocal) ? prevGoldLocal / 1.1 : null
+        const prev18 = Number.isFinite(prevGoldLocal) ? (0.95 * prevGoldLocal) / 1.1 : null
+        const prev16 = Number.isFinite(prevGoldLocal) ? (0.85 * prevGoldLocal) / 1.1 : null
 
-        // helper to trigger blink: (prevVal, curVal, setBlinkFn, timeoutRef)
-        const triggerBlink = (prevVal, curVal, setBlink, timeoutRefLocal) => {
+        const triggerBlinkLocal = (prevVal, curVal, setBlink, timeoutRefLocal) => {
           if (!Number.isFinite(prevVal)) return
           if (curVal > prevVal) {
             setBlink('up')
@@ -348,87 +398,40 @@ const triggerBlink = (prevVal, curVal, setBlinkFn, timeoutRefLocal) => {
           }
         }
 
-        // trigger blink using derived-from-previous (now reliable)
-        triggerBlink(prev22, new22, setBlink22Dir, blinkTimeout22Ref)
-        triggerBlink(prev20, new20, setBlink20Dir, blinkTimeout20Ref)
-        triggerBlink(prev18, new18, setBlink18Dir, blinkTimeout18Ref)
-        triggerBlink(prev16, new16, setBlink16Dir, blinkTimeout16Ref)
+        triggerBlinkLocal(prev22, new22, setBlink22Dir, blinkTimeout22Ref)
+        triggerBlinkLocal(prev20, new20, setBlink20Dir, blinkTimeout20Ref)
+        triggerBlinkLocal(prev18, new18, setBlink18Dir, blinkTimeout18Ref)
+        triggerBlinkLocal(prev16, new16, setBlink16Dir, blinkTimeout16Ref)
 
-        // update per-carat prev refs (keeps them available)
         prev22Ref.current = Number.isFinite(new22) ? new22 : prev22Ref.current
         prev20Ref.current = Number.isFinite(new20) ? new20 : prev20Ref.current
         prev18Ref.current = Number.isFinite(new18) ? new18 : prev18Ref.current
         prev16Ref.current = Number.isFinite(new16) ? new16 : prev16Ref.current
       }
 
-
       // ---------- NEW: blinking for Gold Coin ----------
       const newGoldCoin = Number.isFinite(numericGold) ? (numericGold / 10) + 100 : null
-      const prevGold = prev // use earlier 'prev' (previous 24K) captured above
-      const prevGoldCoin = Number.isFinite(prevGold) ? (prevGold / 10) + 100 : null
-
-      // use same triggerBlink helper (available in this scope)
+      const prevGoldCoin = Number.isFinite(prev) ? (prev / 10) + 100 : null
       triggerBlink(prevGoldCoin, newGoldCoin, setBlinkGoldCoinDir, blinkTimeoutGoldCoinRef)
-
-      // update prev ref
       prevGoldCoinRef.current = Number.isFinite(newGoldCoin) ? newGoldCoin : prevGoldCoinRef.current
-      // ------------------------------------------------
 
-
-
-
-
-      // ----- SILVER (try exact label then fallback) -----
-let silverNum = null
-// try exact 'SILVER NAGPUR RTGS' label first
-const silverLineExact = lines.find(l => /SILVER NAGPUR RTGS/i.test(l))
-if (silverLineExact) {
-  const val = firstNumericAfterLabel(silverLineExact, /SILVER NAGPUR RTGS/i)
-  silverNum = val ? Number(val) : null
-} else {
-  // fallback: any line containing the word 'SILVER'
-  const silverLineAny = lines.find(l => /\bSILVER\b/i.test(l))
-  if (silverLineAny) {
-    const m = silverLineAny.match(/\d+(?:\.\d+)?/)
-    silverNum = m ? Number(m[0]) : null
-  }
-}
-
-// blinking logic for silver (unchanged semantics, but using silverNum)
-const prevSilver = prevSilverRef.current
-if (Number.isFinite(silverNum) && Number.isFinite(prevSilver)) {
-  if (silverNum > prevSilver) {
-    setBlinkSilverDir('up')
-    if (blinkTimeoutSilverRef.current) clearTimeout(blinkTimeoutSilverRef.current)
-    blinkTimeoutSilverRef.current = setTimeout(() => setBlinkSilverDir(null), BLINK_MS)
-  } else if (silverNum < prevSilver) {
-    setBlinkSilverDir('down')
-    if (blinkTimeoutSilverRef.current) clearTimeout(blinkTimeoutSilverRef.current)
-    blinkTimeoutSilverRef.current = setTimeout(() => setBlinkSilverDir(null), BLINK_MS)
-  }
-}
-prevSilverRef.current = Number.isFinite(silverNum) ? silverNum : prevSilverRef.current
-setSilverRate(Number.isFinite(silverNum) ? silverNum : null)
-
-
-      // ----- SPOT GOLD -----
-      // ----- SPOT GOLD (try exact label then fallback) -----
-      let spotNum = null
-      // try exact 'SPOT GOLD' label first
-      const spotLineExact = lines.find(l => /SPOT\s*GOLD/i.test(l))
-      if (spotLineExact) {
-        const val = firstNumericAfterLabel(spotLineExact, /SPOT\s*GOLD/i)
-        spotNum = val ? Number(val) : null
-      } else {
-        // fallback: any line containing 'SPOT'
-        const spotLineAny = lines.find(l => /\bSPOT\b/i.test(l))
-        if (spotLineAny) {
-          const m = spotLineAny.match(/\d+(?:\.\d+)?/)
-          spotNum = m ? Number(m[0]) : null
+      // ----- SILVER (use silverNum computed earlier) -----
+      const prevSilver = prevSilverRef.current
+      if (Number.isFinite(silverNum) && Number.isFinite(prevSilver)) {
+        if (silverNum > prevSilver) {
+          setBlinkSilverDir('up')
+          if (blinkTimeoutSilverRef.current) clearTimeout(blinkTimeoutSilverRef.current)
+          blinkTimeoutSilverRef.current = setTimeout(() => setBlinkSilverDir(null), BLINK_MS)
+        } else if (silverNum < prevSilver) {
+          setBlinkSilverDir('down')
+          if (blinkTimeoutSilverRef.current) clearTimeout(blinkTimeoutSilverRef.current)
+          blinkTimeoutSilverRef.current = setTimeout(() => setBlinkSilverDir(null), BLINK_MS)
         }
       }
+      prevSilverRef.current = Number.isFinite(silverNum) ? silverNum : prevSilverRef.current
+      setSilverRate(Number.isFinite(silverNum) ? silverNum : null)
 
-      // blinking logic for spot gold (unchanged semantics, but using spotNum)
+      // ----- SPOT GOLD (already computed) -----
       const prevSpot = prevSpotRef.current
       if (Number.isFinite(spotNum) && Number.isFinite(prevSpot)) {
         if (spotNum > prevSpot) {
@@ -444,7 +447,6 @@ setSilverRate(Number.isFinite(silverNum) ? silverNum : null)
       prevSpotRef.current = Number.isFinite(spotNum) ? spotNum : prevSpotRef.current
       setSpotGoldRate(Number.isFinite(spotNum) ? spotNum : null)
 
-
       setLoading(false)
 
       const msToUse = nextMs ?? refreshMs
@@ -458,7 +460,7 @@ setSilverRate(Number.isFinite(silverNum) ? silverNum : null)
     }
   }
 
-  // --- NEW: fetch dollar (unchanged) ---
+  // --- NEW: fetch dollar (unchanged endpoint flow) ---
   async function fetchDollar(signal) {
     try {
       const tryEndpoint = async (url) => {
@@ -472,7 +474,19 @@ setSilverRate(Number.isFinite(silverNum) ? silverNum : null)
         const val = j && j.rates && j.rates.INR ? Number(j.rates.INR) : null
         if (Number.isFinite(val)) {
           const prevDollar = prevDollarRef.current
-          if (Number.isFinite(prevDollar) && Number.isFinite(val)) {
+          if (Number.isFinite(prevDollar) && Number.isFinite(val) && Number(val) !== Number(prevDollar)) {
+            // dollar actually changed -> update lastChangeRef and show live status
+            lastChangeRef.current = Date.now()
+            setConnectionStatus('live')
+            if (stableTimeoutRef.current) {
+              clearTimeout(stableTimeoutRef.current)
+              stableTimeoutRef.current = null
+            }
+            stableTimeoutRef.current = setTimeout(() => {
+              setConnectionStatus(prev => (prev === 'offline' ? 'offline' : 'stable'))
+              stableTimeoutRef.current = null
+            }, CHANGE_STABLE_MS)
+            // blink handling
             if (val > prevDollar) {
               setBlinkDollarDir('up')
               if (blinkTimeoutDollarRef.current) clearTimeout(blinkTimeoutDollarRef.current)
@@ -487,12 +501,23 @@ setSilverRate(Number.isFinite(silverNum) ? silverNum : null)
           setDollarRate(val)
           return
         }
-
-        // fallback
+      } catch (e) {}
+      try {
+        const j2 = await tryEndpoint('https://open.er-api.com/v6/latest/USD')
         const val2 = j2 && j2.rates && j2.rates.INR ? Number(j2.rates.INR) : null
         if (Number.isFinite(val2)) {
           const prevDollar = prevDollarRef.current
-          if (Number.isFinite(prevDollar) && Number.isFinite(val2)) {
+          if (Number.isFinite(prevDollar) && Number.isFinite(val2) && Number(val2) !== Number(prevDollar)) {
+            lastChangeRef.current = Date.now()
+            setConnectionStatus('live')
+            if (stableTimeoutRef.current) {
+              clearTimeout(stableTimeoutRef.current)
+              stableTimeoutRef.current = null
+            }
+            stableTimeoutRef.current = setTimeout(() => {
+              setConnectionStatus(prev => (prev === 'offline' ? 'offline' : 'stable'))
+              stableTimeoutRef.current = null
+            }, CHANGE_STABLE_MS)
             if (val2 > prevDollar) {
               setBlinkDollarDir('up')
               if (blinkTimeoutDollarRef.current) clearTimeout(blinkTimeoutDollarRef.current)
@@ -507,12 +532,6 @@ setSilverRate(Number.isFinite(silverNum) ? silverNum : null)
           setDollarRate(val2)
           return
         }
-
-      } catch (e) {}
-      try {
-        const j2 = await tryEndpoint('https://open.er-api.com/v6/latest/USD')
-        const val2 = j2 && j2.rates && j2.rates.INR ? Number(j2.rates.INR) : null
-        setDollarRate(Number.isFinite(val2) ? val2 : null)
       } catch (e) {
         setDollarRate(null)
       }
@@ -596,7 +615,7 @@ setSilverRate(Number.isFinite(silverNum) ? silverNum : null)
     fetchRate(controllerRef.current.signal, ms)
   }
 
-  // mount (unchanged aside from blink refs initialization)
+  // mount (unchanged aside from blink refs initialization + cleanup of stableTimeout)
   useEffect(() => {
     try {
       const storedMaking = localStorage.getItem(LS_MAKING_KEY)
@@ -627,7 +646,7 @@ setSilverRate(Number.isFinite(silverNum) ? silverNum : null)
       const raw = localStorage.getItem(LS_CHART_KEY)
       if (raw) {
         const parsed = JSON.parse(raw)
-        if (Array.isArray(parsed) && parsed.length) {
+        if (Array.isArray(parsed) &&(parsed).length) {
           const valid = parsed
             .filter(p => p && typeof p.ts === 'number' && Number.isFinite(p.rate))
             .map(p => ({ time: p.time || new Date(p.ts).toLocaleTimeString(), rate: Number(p.rate), ts: Number(p.ts) }))
@@ -683,6 +702,11 @@ setSilverRate(Number.isFinite(silverNum) ? silverNum : null)
         if (blinkTimeoutGoldCoinRef.current) clearTimeout(blinkTimeoutGoldCoinRef.current)
         if (blinkTimeoutDollarRef.current) clearTimeout(blinkTimeoutDollarRef.current)
 
+        // clear stable timeout
+        if (stableTimeoutRef.current) {
+          clearTimeout(stableTimeoutRef.current)
+          stableTimeoutRef.current = null
+        }
       }
     } catch (e) {
       controllerRef.current = new AbortController()
@@ -700,7 +724,7 @@ setSilverRate(Number.isFinite(silverNum) ? silverNum : null)
     fetchRate(controllerRef.current.signal)
   }, [refreshMs])
 
-  // staleness checker unchanged
+  // staleness checker (reworked): decide Offline vs Live vs Stable
   useEffect(() => {
     if (stalenessIntervalRef.current) {
       clearInterval(stalenessIntervalRef.current)
@@ -710,11 +734,20 @@ setSilverRate(Number.isFinite(silverNum) ? silverNum : null)
     stalenessIntervalRef.current = setInterval(() => {
       if (!lastUpdate) return
       const age = Date.now() - lastUpdate.getTime()
-      const threshold = Math.max(refreshMs * 2, 30000)
-      if (age > threshold) {
+      const offlineThreshold = Math.max(refreshMs * 2, 30000)
+      // if no recent successful fetch => offline
+      if (age > offlineThreshold) {
         setConnectionStatus('offline')
+        return
+      }
+
+      // If there was a change within CHANGE_STABLE_MS -> live
+      const lastCh = lastChangeRef.current
+      if (lastCh && (Date.now() - lastCh) <= CHANGE_STABLE_MS) {
+        setConnectionStatus('live')
       } else {
-        setConnectionStatus(prev => (prev === 'offline' ? 'stable' : prev))
+        // if no changes within the hour -> stable
+        setConnectionStatus(prev => (prev === 'offline' ? 'offline' : 'stable'))
       }
     }, 2000)
 
