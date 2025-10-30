@@ -1,18 +1,19 @@
 import React, { useEffect, useRef, useState } from 'react'
 import "tailwindcss";
+import { LineChart, Line, XAxis, YAxis, Tooltip, CartesianGrid, ResponsiveContainer } from 'recharts'
 
 /**
  * GoldLiveRatesComponent
  *
  * Props:
  *  - logoSrc?: string
- *  - shopName?: string         // fallback text if shopImageSrc not provided
- *  - shopImageSrc?: string     // new: image URL to show instead of shopName text
+ *  - shopName?: string
+ *  - shopImageSrc?: string
  *  - defaultRefreshSeconds?: number
  */
 export default function GoldLiveRatesComponent({
   logoSrc,
-  shopName = "Sagar Jewellers",
+  shopName = "",
   shopImageSrc = null,
   shopSalutation = null,
   defaultRefreshSeconds = 60
@@ -29,85 +30,138 @@ export default function GoldLiveRatesComponent({
   // state for fetched rate
   const [rate, setRate] = useState(null)
   const [loading, setLoading] = useState(true)
+  const [initialized, setInitialized] = useState(false)
   const [error, setError] = useState(null)
   const [lastUpdate, setLastUpdate] = useState(null)
   const [silverRate, setSilverRate] = useState(null);
   const [spotGoldRate, setSpotGoldRate] = useState(null);
+  const [blinkGoldCoinDir, setBlinkGoldCoinDir] = useState(null)
+  const [blinkDollarDir, setBlinkDollarDir] = useState(null)
+
 
   // --- NEW: dollar state ---
   const [dollarRate, setDollarRate] = useState(null)
   const dollarControllerRef = useRef(null)
   const dollarIntervalRef = useRef(null)
-  const DOLLAR_POLL_MS = 10000 // 10 seconds polling (change if you want faster/slower)
+  const prevGoldCoinRef = useRef(null)
+  const prevDollarRef = useRef(null)
+  const DOLLAR_POLL_MS = 10000 // 10 seconds polling
+
+  
 
   // ---------- NEW: live/connection indicator state & refs ----------
-  // connectionStatus: 'connecting' | 'live' | 'stable' | 'offline'
   const [connectionStatus, setConnectionStatus] = useState('connecting')
   const previousRateRef = useRef(null)
   const liveTimeoutRef = useRef(null)
   const stalenessIntervalRef = useRef(null)
+  const blinkTimeoutGoldCoinRef = useRef(null)
+  const blinkTimeoutDollarRef = useRef(null)
   const LIVE_DISPLAY_MS = 3000 // how long to show "Live" after a change
   // ------------------------------------------------------------------
 
   // NEW: show/hide making input when clicking the logo
   const [showMaking, setShowMaking] = useState(false)
 
-  // helper: return first numeric match (string) inside token, or null
+  // helper functions (kept unchanged)
   function extractNumericFromToken(token) {
     const m = token.match(/-?\d+(?:\.\d+)?/)
     return m ? m[0] : null
   }
-
-  // helper: find the first numeric token after matching productRegex in the line
   function firstNumericAfterLabel(line, productRegex) {
     const m = line.match(productRegex)
     if (!m) return null
-
-    // text after the matched product label
     const after = line.slice(m.index + m[0].length)
-
-    // prefer splitting by tabs (most structured responses use tabs)
     const tabCols = after.split(/\t+/).map(c => c.trim()).filter(Boolean)
     if (tabCols.length) {
-      // look through columns left-to-right, skipping a single '-' column
       for (let i = 0; i < tabCols.length; i++) {
         const col = tabCols[i]
         if (col === '-' || /^[-—]+$/.test(col)) continue
         const num = extractNumericFromToken(col)
         if (num) return num
-        // sometimes the numeric sits inside subsequent columns — continue scanning
       }
     }
-
-    // fallback: split by whitespace groups (handles cases without tabs)
     const wsCols = after.split(/\s{2,}|\s+\t*/).map(c => c.trim()).filter(Boolean)
     for (const col of wsCols) {
       if (col === '-' || /^[-—]+$/.test(col)) continue
       const num = extractNumericFromToken(col)
       if (num) return num
     }
-
-    // final fallback: first numeric anywhere after the match
     const fallback = after.match(/\d+(?:\.\d+)?/)
     return fallback ? fallback[0] : null
   }
 
   // refresh controls
-  const [refreshVal, setRefreshVal] = useState('') // user input numeric
-  const [refreshUnit, setRefreshUnit] = useState('seconds') // 'seconds' | 'minutes'
+  const [refreshVal, setRefreshVal] = useState('')
+  const [refreshUnit, setRefreshUnit] = useState('seconds')
   const [refreshMs, setRefreshMs] = useState(() => (defaultRefreshSeconds ?? 15) * 1000)
 
-  // NEW: Making input state (user-supplied making charge; default 5250 when empty/invalid)
-  const [makingVal, setMakingVal] = useState('') // text input; used instead of 5250 when valid
+  // Making input
+  const [makingVal, setMakingVal] = useState('')
 
-  // countdown (seconds remaining until next refresh)
+  // countdown
   const [remaining, setRemaining] = useState(Math.ceil(refreshMs / 1000))
 
   const timeoutRef = useRef(null)
   const countdownRef = useRef(null)
   const controllerRef = useRef(null)
 
-  // helper: clear scheduled timeout + countdown
+  // ---------- NEW: chart state ----------
+  const [chartData, setChartData] = useState([])
+  const MAX_POINTS = 120
+  // ----------------------------------------------------
+
+  // Chart persistence
+  const LS_CHART_KEY = 'gold_chart_points_v2'
+  const MAX_STORE_POINTS = 20000
+  const [selectedRange, setSelectedRange] = useState('1D')
+  const displayedData = React.useMemo(() => {
+    if (!chartData || chartData.length === 0) return []
+    if (selectedRange === 'ALL') return chartData
+    const now = Date.now()
+    const ms = (rangeToMs(selectedRange))
+    const threshold = now - ms
+    return chartData.filter(p => (p && p.ts && p.ts >= threshold))
+  }, [chartData, selectedRange])
+  function rangeToMs(range) {
+    if (range === '1D') return 24 * 60 * 60 * 1000
+    if (range === '1M') return 30 * 24 * 60 * 60 * 1000
+    if (range === '1Y') return 365 * 24 * 60 * 60 * 1000
+    return Infinity
+  }
+  function compressForStorage(arr) {
+    if (!Array.isArray(arr)) return []
+    if (arr.length <= MAX_STORE_POINTS) return arr
+    return arr.slice(arr.length - MAX_STORE_POINTS)
+  }
+
+  // ---------- NEW: blinking feature state & refs ----------
+  const BLINK_MS = 900
+  // blink direction: 'up' | 'down' | null
+  const [blinkRateDir, setBlinkRateDir] = useState(null)
+  const [blinkSilverDir, setBlinkSilverDir] = useState(null)
+  const [blinkSpotDir, setBlinkSpotDir] = useState(null)
+  const [blink22Dir, setBlink22Dir] = useState(null)
+  const [blink20Dir, setBlink20Dir] = useState(null)
+  const [blink18Dir, setBlink18Dir] = useState(null)
+  const [blink16Dir, setBlink16Dir] = useState(null)
+
+  const prevSilverRef = useRef(null)
+  const prevSpotRef = useRef(null)
+  const prev22Ref = useRef(null)
+  const prev20Ref = useRef(null)
+  const prev18Ref = useRef(null)
+  const prev16Ref = useRef(null)
+
+  const blinkTimeoutRateRef = useRef(null)
+  const blinkTimeoutSilverRef = useRef(null)
+  const blinkTimeoutSpotRef = useRef(null)
+  const blinkTimeout22Ref = useRef(null)
+  const blinkTimeout20Ref = useRef(null)
+  const blinkTimeout18Ref = useRef(null)
+  const blinkTimeout16Ref = useRef(null)
+
+  // ------------------------------------------------------
+
   function clearSchedules() {
     if (timeoutRef.current) {
       clearTimeout(timeoutRef.current)
@@ -134,20 +188,16 @@ export default function GoldLiveRatesComponent({
     }, 1000)
   }
 
-
-  // schedule next fetch using timeout so that refresh interval can change dynamically
   function scheduleNextFetch(ms) {
     if (timeoutRef.current) clearTimeout(timeoutRef.current)
     timeoutRef.current = setTimeout(() => {
-      // call fetchRate with the current controller signal
       fetchRate(controllerRef.current?.signal)
     }, ms)
     startCountdown(ms)
   }
 
-  // main fetch function (signal optional). Accepts optional nextMs to control scheduling immediately
   async function fetchRate(signal, nextMs = null) {
-    setLoading(true)
+    if (!initialized) setLoading(true)
     setError(null)
 
     try {
@@ -160,7 +210,6 @@ export default function GoldLiveRatesComponent({
         .map(l => l.trim())
         .filter(Boolean)
 
-      // ----- GOLD (existing robust parsing preserved) -----
       const goldLine = lines.find(l =>
         /GOLD NAGPUR 99\.5 RTGS \(Rate 50 gm\)/i.test(l)
       )
@@ -199,17 +248,57 @@ export default function GoldLiveRatesComponent({
       if (!extracted) throw new Error('Could not parse numeric rate from GOLD line')
 
       const numericGold = Number(extracted)
+
+      // ---------- NEW: blinking logic for main gold rate (24K 10gm) ----------
+      // compare with previous before updating previousRateRef
+      const prev = previousRateRef.current
+if (Number.isFinite(numericGold) && Number.isFinite(prev)) {
+  if (Number(numericGold) > Number(prev)) {
+    setBlinkRateDir('up')
+    if (blinkTimeoutRateRef.current) clearTimeout(blinkTimeoutRateRef.current)
+    blinkTimeoutRateRef.current = setTimeout(() => setBlinkRateDir(null), BLINK_MS)
+  } else if (Number(numericGold) < Number(prev)) {
+    setBlinkRateDir('down')
+    if (blinkTimeoutRateRef.current) clearTimeout(blinkTimeoutRateRef.current)
+    blinkTimeoutRateRef.current = setTimeout(() => setBlinkRateDir(null), BLINK_MS)
+  }
+}
+
+// ---- helper for derived blinks (moved here so it's available everywhere) ----
+const triggerBlink = (prevVal, curVal, setBlinkFn, timeoutRefLocal) => {
+  if (!Number.isFinite(prevVal) || !Number.isFinite(curVal)) return
+  if (curVal > prevVal) {
+    setBlinkFn('up')
+    if (timeoutRefLocal.current) clearTimeout(timeoutRefLocal.current)
+    timeoutRefLocal.current = setTimeout(() => setBlinkFn(null), BLINK_MS)
+  } else if (curVal < prevVal) {
+    setBlinkFn('down')
+    if (timeoutRefLocal.current) clearTimeout(timeoutRefLocal.current)
+    timeoutRefLocal.current = setTimeout(() => setBlinkFn(null), BLINK_MS)
+  }
+}
+// -----------------------------------------------------------------------------
+
       setRate(Number.isFinite(numericGold) ? numericGold : null)
       setLastUpdate(new Date())
 
-      // ---------- NEW: update connection status based on change ----------
-      // if previous exists and differs -> show 'live' briefly
-      const prev = previousRateRef.current
+      if (Number.isFinite(numericGold)) {
+        const point = {
+          time: new Date().toLocaleTimeString(),
+          rate: numericGold,
+          ts: Date.now()
+        }
+        setChartData(prev => {
+          const next = [...prev, point]
+          if (next.length > MAX_POINTS) next.shift()
+          return next
+        })
+      }
+
+      // connection status logic (unchanged)
       if (Number.isFinite(numericGold) && (prev === null || !Number.isFinite(prev))) {
-        // first valid value: mark stable
         setConnectionStatus('stable')
       } else if (Number.isFinite(numericGold) && Number.isFinite(prev) && Number(numericGold) !== Number(prev)) {
-        // value changed -> Live
         setConnectionStatus('live')
         if (liveTimeoutRef.current) clearTimeout(liveTimeoutRef.current)
         liveTimeoutRef.current = setTimeout(() => {
@@ -217,79 +306,214 @@ export default function GoldLiveRatesComponent({
           liveTimeoutRef.current = null
         }, LIVE_DISPLAY_MS)
       } else {
-        // value didn't change -> stable (connected)
         setConnectionStatus('stable')
       }
       previousRateRef.current = numericGold
-      // ------------------------------------------------------------------
 
-      // ----- SILVER (first numeric immediately after product label) -----
-      const silverLine = lines.find(l => /SILVER NAGPUR RTGS/i.test(l))
-      if (silverLine) {
-        const val = firstNumericAfterLabel(silverLine, /SILVER NAGPUR RTGS/i)
-        const num = val ? Number(val) : null
-        setSilverRate(Number.isFinite(num) ? num : null)
-      } else {
-        setSilverRate(null)
+      if (!initialized) {
+        setInitialized(true)
+        setLoading(false)
       }
 
-      // ----- SPOT GOLD (first numeric immediately after product label) -----
-      const spotLine = lines.find(l => /SPOT\s*GOLD/i.test(l))
-      if (spotLine) {
-        const val = firstNumericAfterLabel(spotLine, /SPOT\s*GOLD/i)
-        const num = val ? Number(val) : null
-        setSpotGoldRate(Number.isFinite(num) ? num : null)
-      } else {
-        setSpotGoldRate(null)
+
+
+      // ---------- NEW: blinking for derived carats (10 gm) ----------
+      // Use the already-saved `prev` (previous 24K numeric gold) to derive prior values.
+      // This must use the saved prev (not previousRateRef.current which was updated).
+      if (Number.isFinite(numericGold)) {
+        // compute derived 10gm values (current)
+        const new22 = (numericGold + makingNumber) / 1.1    // 22K 10gm
+        const new20 = numericGold / 1.1                    // 20K 10gm
+        const new18 = (0.95 * numericGold) / 1.1           // 18K 10gm
+        const new16 = (0.85 * numericGold) / 1.1           // 16K 10gm
+
+        // IMPORTANT: use the earlier saved `prev` (previous 24K value), not previousRateRef.current
+        const prevGold = prev
+        const prev22 = Number.isFinite(prevGold) ? (prevGold + makingNumber) / 1.1 : null
+        const prev20 = Number.isFinite(prevGold) ? prevGold / 1.1 : null
+        const prev18 = Number.isFinite(prevGold) ? (0.95 * prevGold) / 1.1 : null
+        const prev16 = Number.isFinite(prevGold) ? (0.85 * prevGold) / 1.1 : null
+
+        // helper to trigger blink: (prevVal, curVal, setBlinkFn, timeoutRef)
+        const triggerBlink = (prevVal, curVal, setBlink, timeoutRefLocal) => {
+          if (!Number.isFinite(prevVal)) return
+          if (curVal > prevVal) {
+            setBlink('up')
+            if (timeoutRefLocal.current) clearTimeout(timeoutRefLocal.current)
+            timeoutRefLocal.current = setTimeout(() => setBlink(null), BLINK_MS)
+          } else if (curVal < prevVal) {
+            setBlink('down')
+            if (timeoutRefLocal.current) clearTimeout(timeoutRefLocal.current)
+            timeoutRefLocal.current = setTimeout(() => setBlink(null), BLINK_MS)
+          }
+        }
+
+        // trigger blink using derived-from-previous (now reliable)
+        triggerBlink(prev22, new22, setBlink22Dir, blinkTimeout22Ref)
+        triggerBlink(prev20, new20, setBlink20Dir, blinkTimeout20Ref)
+        triggerBlink(prev18, new18, setBlink18Dir, blinkTimeout18Ref)
+        triggerBlink(prev16, new16, setBlink16Dir, blinkTimeout16Ref)
+
+        // update per-carat prev refs (keeps them available)
+        prev22Ref.current = Number.isFinite(new22) ? new22 : prev22Ref.current
+        prev20Ref.current = Number.isFinite(new20) ? new20 : prev20Ref.current
+        prev18Ref.current = Number.isFinite(new18) ? new18 : prev18Ref.current
+        prev16Ref.current = Number.isFinite(new16) ? new16 : prev16Ref.current
       }
+
+
+      // ---------- NEW: blinking for Gold Coin ----------
+      const newGoldCoin = Number.isFinite(numericGold) ? (numericGold / 10) + 100 : null
+      const prevGold = prev // use earlier 'prev' (previous 24K) captured above
+      const prevGoldCoin = Number.isFinite(prevGold) ? (prevGold / 10) + 100 : null
+
+      // use same triggerBlink helper (available in this scope)
+      triggerBlink(prevGoldCoin, newGoldCoin, setBlinkGoldCoinDir, blinkTimeoutGoldCoinRef)
+
+      // update prev ref
+      prevGoldCoinRef.current = Number.isFinite(newGoldCoin) ? newGoldCoin : prevGoldCoinRef.current
+      // ------------------------------------------------
+
+
+
+
+
+      // ----- SILVER (try exact label then fallback) -----
+let silverNum = null
+// try exact 'SILVER NAGPUR RTGS' label first
+const silverLineExact = lines.find(l => /SILVER NAGPUR RTGS/i.test(l))
+if (silverLineExact) {
+  const val = firstNumericAfterLabel(silverLineExact, /SILVER NAGPUR RTGS/i)
+  silverNum = val ? Number(val) : null
+} else {
+  // fallback: any line containing the word 'SILVER'
+  const silverLineAny = lines.find(l => /\bSILVER\b/i.test(l))
+  if (silverLineAny) {
+    const m = silverLineAny.match(/\d+(?:\.\d+)?/)
+    silverNum = m ? Number(m[0]) : null
+  }
+}
+
+// blinking logic for silver (unchanged semantics, but using silverNum)
+const prevSilver = prevSilverRef.current
+if (Number.isFinite(silverNum) && Number.isFinite(prevSilver)) {
+  if (silverNum > prevSilver) {
+    setBlinkSilverDir('up')
+    if (blinkTimeoutSilverRef.current) clearTimeout(blinkTimeoutSilverRef.current)
+    blinkTimeoutSilverRef.current = setTimeout(() => setBlinkSilverDir(null), BLINK_MS)
+  } else if (silverNum < prevSilver) {
+    setBlinkSilverDir('down')
+    if (blinkTimeoutSilverRef.current) clearTimeout(blinkTimeoutSilverRef.current)
+    blinkTimeoutSilverRef.current = setTimeout(() => setBlinkSilverDir(null), BLINK_MS)
+  }
+}
+prevSilverRef.current = Number.isFinite(silverNum) ? silverNum : prevSilverRef.current
+setSilverRate(Number.isFinite(silverNum) ? silverNum : null)
+
+
+      // ----- SPOT GOLD -----
+      // ----- SPOT GOLD (try exact label then fallback) -----
+      let spotNum = null
+      // try exact 'SPOT GOLD' label first
+      const spotLineExact = lines.find(l => /SPOT\s*GOLD/i.test(l))
+      if (spotLineExact) {
+        const val = firstNumericAfterLabel(spotLineExact, /SPOT\s*GOLD/i)
+        spotNum = val ? Number(val) : null
+      } else {
+        // fallback: any line containing 'SPOT'
+        const spotLineAny = lines.find(l => /\bSPOT\b/i.test(l))
+        if (spotLineAny) {
+          const m = spotLineAny.match(/\d+(?:\.\d+)?/)
+          spotNum = m ? Number(m[0]) : null
+        }
+      }
+
+      // blinking logic for spot gold (unchanged semantics, but using spotNum)
+      const prevSpot = prevSpotRef.current
+      if (Number.isFinite(spotNum) && Number.isFinite(prevSpot)) {
+        if (spotNum > prevSpot) {
+          setBlinkSpotDir('up')
+          if (blinkTimeoutSpotRef.current) clearTimeout(blinkTimeoutSpotRef.current)
+          blinkTimeoutSpotRef.current = setTimeout(() => setBlinkSpotDir(null), BLINK_MS)
+        } else if (spotNum < prevSpot) {
+          setBlinkSpotDir('down')
+          if (blinkTimeoutSpotRef.current) clearTimeout(blinkTimeoutSpotRef.current)
+          blinkTimeoutSpotRef.current = setTimeout(() => setBlinkSpotDir(null), BLINK_MS)
+        }
+      }
+      prevSpotRef.current = Number.isFinite(spotNum) ? spotNum : prevSpotRef.current
+      setSpotGoldRate(Number.isFinite(spotNum) ? spotNum : null)
+
 
       setLoading(false)
 
-      // schedule next run using provided nextMs or current refreshMs
       const msToUse = nextMs ?? refreshMs
       scheduleNextFetch(msToUse)
     } catch (err) {
       if (err?.name === 'AbortError') return
       setError(err?.message ?? String(err))
-      setLoading(false)
-      // mark offline on error
+      if (!initialized) setLoading(false)
       setConnectionStatus('offline')
-      // still schedule retry so UI recovers; use current refreshMs
       scheduleNextFetch(refreshMs)
     }
   }
 
-  // --- NEW: fetch dollar from a free API (USD -> INR) ---
+  // --- NEW: fetch dollar (unchanged) ---
   async function fetchDollar(signal) {
     try {
-      // primary free endpoint
       const tryEndpoint = async (url) => {
         const r = await fetch(url, { signal })
         if (!r.ok) throw new Error(`HTTP ${r.status}`)
         return r.json()
       }
-
-      // try primary
       let j = null
       try {
         j = await tryEndpoint('https://api.exchangerate.host/latest?base=USD&symbols=INR')
         const val = j && j.rates && j.rates.INR ? Number(j.rates.INR) : null
         if (Number.isFinite(val)) {
+          const prevDollar = prevDollarRef.current
+          if (Number.isFinite(prevDollar) && Number.isFinite(val)) {
+            if (val > prevDollar) {
+              setBlinkDollarDir('up')
+              if (blinkTimeoutDollarRef.current) clearTimeout(blinkTimeoutDollarRef.current)
+              blinkTimeoutDollarRef.current = setTimeout(() => setBlinkDollarDir(null), BLINK_MS)
+            } else if (val < prevDollar) {
+              setBlinkDollarDir('down')
+              if (blinkTimeoutDollarRef.current) clearTimeout(blinkTimeoutDollarRef.current)
+              blinkTimeoutDollarRef.current = setTimeout(() => setBlinkDollarDir(null), BLINK_MS)
+            }
+          }
+          prevDollarRef.current = Number.isFinite(val) ? val : prevDollarRef.current
           setDollarRate(val)
           return
         }
-        // else fallthrough to fallback
-      } catch (e) {
-        // try fallback below
-      }
 
-      // fallback free endpoint
+        // fallback
+        const val2 = j2 && j2.rates && j2.rates.INR ? Number(j2.rates.INR) : null
+        if (Number.isFinite(val2)) {
+          const prevDollar = prevDollarRef.current
+          if (Number.isFinite(prevDollar) && Number.isFinite(val2)) {
+            if (val2 > prevDollar) {
+              setBlinkDollarDir('up')
+              if (blinkTimeoutDollarRef.current) clearTimeout(blinkTimeoutDollarRef.current)
+              blinkTimeoutDollarRef.current = setTimeout(() => setBlinkDollarDir(null), BLINK_MS)
+            } else if (val2 < prevDollar) {
+              setBlinkDollarDir('down')
+              if (blinkTimeoutDollarRef.current) clearTimeout(blinkTimeoutDollarRef.current)
+              blinkTimeoutDollarRef.current = setTimeout(() => setBlinkDollarDir(null), BLINK_MS)
+            }
+          }
+          prevDollarRef.current = Number.isFinite(val2) ? val2 : prevDollarRef.current
+          setDollarRate(val2)
+          return
+        }
+
+      } catch (e) {}
       try {
         const j2 = await tryEndpoint('https://open.er-api.com/v6/latest/USD')
         const val2 = j2 && j2.rates && j2.rates.INR ? Number(j2.rates.INR) : null
         setDollarRate(Number.isFinite(val2) ? val2 : null)
       } catch (e) {
-        // on complete failure keep null (UI will show dash)
         setDollarRate(null)
       }
     } catch (err) {
@@ -298,13 +522,11 @@ export default function GoldLiveRatesComponent({
     }
   }
 
-
-  // build derived table values from base (24K)
+  // build derived table values (unchanged)
   function buildTable(base) {
     if (!base || !Number.isFinite(base)) return null
     const b = Number(base)
     const row24 = b
-    // use makingNumber (computed below) for 22K calculation
     const row22 = (row24 + makingNumber) / 1.1
     const row20 = row24 / 1.1
     const row18 = (0.95 * row24) / 1.1
@@ -321,29 +543,26 @@ export default function GoldLiveRatesComponent({
     return rows.map(r => ({ ...r, ratePer10: r.rate / 10 }))
   }
 
-  // NEW: compute makingNumber from makingVal (fallback 5250)
+  // makingNumber (unchanged)
   const makingNumber = (function () {
     const n = Number(makingVal)
     if (Number.isFinite(n) && n >= 0) return n
     return 5250
   })()
 
-  // derived rates for quick display (moved after makingNumber)
+  // derived rates (unchanged)
   const rate22K10gm = rate ? (rate + makingNumber) / 1.1 : null
   const rate20K10gm = rate ? rate / 1.1 : null
   const rate18K10gm = rate ? (0.95 * rate) / 1.1 : null
   const rate16K10gm = rate ? (0.85 * rate) / 1.1 : null
   const goldcoin = Number.isFinite(rate) ? (rate/10) + 100 : null;
 
-
-  // format integer with commas (round to nearest integer)
+  // format utilities (unchanged)
   function fmtInt(val) {
     if (val === null || val === undefined || Number.isNaN(val)) return '—'
     const n = Math.round(Number(val))
     return n.toLocaleString('en-IN')
   }
-
-
   function fmtDecimal(val, decimals = 2) {
     if (val === null || val === undefined || Number.isNaN(val)) return '—'
     const n = Number(val)
@@ -356,46 +575,34 @@ export default function GoldLiveRatesComponent({
 
   const tableRows = buildTable(rate)
 
-  // handle apply button: compute ms from user input and restart cycle
+  // applyRefresh unchanged
   function applyRefresh() {
     let v = Number(refreshVal)
     if (!Number.isFinite(v) || v <= 0) {
-      // reset to default
-      v = defaultRefreshSeconds ?? 60
+      v = defaultRefreshSeconds ?? 15
       setRefreshVal('')
       setRefreshUnit('seconds')
-      // remove stored value because user applied default
       localStorage.removeItem(LS_REFRESH_VAL_KEY)
       localStorage.removeItem(LS_REFRESH_UNIT_KEY)
     } else {
-      // persist the applied refresh inputs
       localStorage.setItem(LS_REFRESH_VAL_KEY, String(refreshVal))
       localStorage.setItem(LS_REFRESH_UNIT_KEY, refreshUnit)
     }
-
     const ms = refreshUnit === 'minutes' ? v * 60_000 : v * 1000
     setRefreshMs(ms)
-
-    // abort any active fetch and restart immediately with new interval
     if (controllerRef.current) controllerRef.current.abort()
     controllerRef.current = new AbortController()
-
     clearSchedules()
-    // call fetchRate and pass ms explicitly so scheduling uses the applied value immediately
     fetchRate(controllerRef.current.signal, ms)
   }
 
-  // mount: read persisted inputs and start first fetch and ensure cleanup on unmount
-  // mount: read persisted inputs and start first fetch and ensure cleanup on unmount
+  // mount (unchanged aside from blink refs initialization)
   useEffect(() => {
-    // read persisted making + refresh values BEFORE starting fetch so initial scheduling uses them
     try {
       const storedMaking = localStorage.getItem(LS_MAKING_KEY)
       if (storedMaking !== null) {
-        // parse and validate the stored value — avoid storing invalid zeros etc.
         const parsed = Number(storedMaking)
         if (Number.isFinite(parsed) && parsed >= 0) {
-          // normalize to string of the numeric value (no extra whitespace)
           setMakingVal(String(parsed))
         } else {
           localStorage.removeItem(LS_MAKING_KEY)
@@ -405,7 +612,7 @@ export default function GoldLiveRatesComponent({
 
       const sv = localStorage.getItem(LS_REFRESH_VAL_KEY)
       const su = localStorage.getItem(LS_REFRESH_UNIT_KEY)
-      let initialMs = (defaultRefreshSeconds ?? 60) * 1000
+      let initialMs = (defaultRefreshSeconds ?? 15) * 1000
       if (sv !== null) {
         const parsed = Number(sv)
         const unit = su || 'seconds'
@@ -417,11 +624,24 @@ export default function GoldLiveRatesComponent({
         }
       }
 
+      const raw = localStorage.getItem(LS_CHART_KEY)
+      if (raw) {
+        const parsed = JSON.parse(raw)
+        if (Array.isArray(parsed) && parsed.length) {
+          const valid = parsed
+            .filter(p => p && typeof p.ts === 'number' && Number.isFinite(p.rate))
+            .map(p => ({ time: p.time || new Date(p.ts).toLocaleTimeString(), rate: Number(p.rate), ts: Number(p.ts) }))
+          setChartData(prev => {
+            const merged = [...(valid || []), ...(prev || [])]
+            const byTs = Array.from(new Map(merged.map(x => [x.ts, x])).values()).sort((a,b)=>a.ts-b.ts)
+            return byTs.slice(Math.max(0, byTs.length - MAX_POINTS))
+          })
+        }
+      }
+
       controllerRef.current = new AbortController()
-      // pass initialMs to ensure fetchRate uses the persisted interval when scheduling
       fetchRate(controllerRef.current.signal, initialMs)
 
-      // start dollar polling (immediate + interval)
       dollarControllerRef.current = new AbortController()
       fetchDollar(dollarControllerRef.current.signal)
       if (dollarIntervalRef.current) clearInterval(dollarIntervalRef.current)
@@ -449,30 +669,38 @@ export default function GoldLiveRatesComponent({
           clearInterval(stalenessIntervalRef.current)
           stalenessIntervalRef.current = null
         }
+
+        // clear blink timers
+        if (blinkTimeoutRateRef.current) clearTimeout(blinkTimeoutRateRef.current)
+        if (blinkTimeout22Ref.current) clearTimeout(blinkTimeout22Ref.current)
+        if (blinkTimeout20Ref.current) clearTimeout(blinkTimeout20Ref.current)
+        if (blinkTimeout18Ref.current) clearTimeout(blinkTimeout18Ref.current)
+        if (blinkTimeout16Ref.current) clearTimeout(blinkTimeout16Ref.current)
+
+        if (blinkTimeoutSilverRef.current) clearTimeout(blinkTimeoutSilverRef.current)
+        if (blinkTimeoutSpotRef.current) clearTimeout(blinkTimeoutSpotRef.current)
+
+        if (blinkTimeoutGoldCoinRef.current) clearTimeout(blinkTimeoutGoldCoinRef.current)
+        if (blinkTimeoutDollarRef.current) clearTimeout(blinkTimeoutDollarRef.current)
+
       }
     } catch (e) {
-      // if anything goes wrong while reading storage, still proceed with defaults
       controllerRef.current = new AbortController()
       fetchRate(controllerRef.current.signal)
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-
-  // if refreshMs changes externally (e.g., via prop change), restart schedules
+  // if refreshMs changes externally (unchanged)
   useEffect(() => {
-    // when refreshMs changes while we have lastUpdate, reschedule from now
     if (!lastUpdate) return
     clearSchedules()
-    // abort ongoing fetch to ensure fresh start
     if (controllerRef.current) controllerRef.current.abort()
     controllerRef.current = new AbortController()
     fetchRate(controllerRef.current.signal)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [refreshMs])
 
-  // ---------- NEW: staleness checker ----------
-  // marks offline if last update becomes older than threshold (2*refresh or 30s)
+  // staleness checker unchanged
   useEffect(() => {
     if (stalenessIntervalRef.current) {
       clearInterval(stalenessIntervalRef.current)
@@ -486,7 +714,6 @@ export default function GoldLiveRatesComponent({
       if (age > threshold) {
         setConnectionStatus('offline')
       } else {
-        // if it was offline but now updated recently, set back to stable
         setConnectionStatus(prev => (prev === 'offline' ? 'stable' : prev))
       }
     }, 2000)
@@ -498,40 +725,37 @@ export default function GoldLiveRatesComponent({
       }
     }
   }, [lastUpdate, refreshMs])
-  // ------------------------------------------------
 
-
-  // persist makingVal to localStorage whenever user types a valid number (or clear it when invalid)
-  // persist makingVal to localStorage whenever user types a valid number (or clear it when invalid)
+  // persist makingVal unchanged
   useEffect(() => {
     try {
       const trimmed = (makingVal ?? '').toString().trim()
       if (trimmed === '') {
-        // empty input -> remove stored value (component will fall back to 5250)
         localStorage.removeItem(LS_MAKING_KEY)
         return
       }
-
       const n = Number(trimmed)
       if (Number.isFinite(n) && n >= 0) {
-        // normalize stored value to canonical numeric string (prevents '0123' or ' 123 ' issues)
         localStorage.setItem(LS_MAKING_KEY, String(n))
-        // if user typed '00123' or with spaces, normalize UI as well so stored value and input match
         if (String(n) !== makingVal) {
           setMakingVal(String(n))
         }
       } else {
-        // invalid number -> remove stored value
         localStorage.removeItem(LS_MAKING_KEY)
       }
-    } catch (e) {
-      // ignore storage errors
-    }
+    } catch (e) {}
   }, [makingVal])
 
+  // persist chartData unchanged
+  useEffect(() => {
+    try {
+      if (!chartData || chartData.length === 0) return
+      const toStore = compressForStorage(chartData.map(p => ({ ts: p.ts, rate: p.rate, time: p.time })))
+      localStorage.setItem(LS_CHART_KEY, JSON.stringify(toStore))
+    } catch (e) {}
+  }, [chartData])
 
   // ---------- Small presentational subcomponents ----------
-  // NOTE: changed sizing: keep original on small screens, increase on md+ to match wider right width
   const RightCard = ({ children }) => (
     <div className="w-full max-w-xl md:max-w-lg bg-gradient-to-r from-amber-500 via-amber-400 to-amber-300 rounded-2xl p-3 shadow-lg ring-1 ring-amber-900/30">
       <div className="bg-white/95 rounded-xl p-4 flex flex-col items-center justify-center min-h-[113px]">
@@ -540,20 +764,26 @@ export default function GoldLiveRatesComponent({
     </div>
   )
 
-    const RightSingleStack = ({ title = '', bigValue = null, loading = false }) => (
-    <div className="w-full flex items-center justify-center">
-      <RightCard>
-        <div className="w-full flex flex-col items-center">
-          <div className="text-xl text-gray-800 font-bold">{title}</div>
-          <div className="mt-2 text-4xl md:text-5xl font-extrabold text-rose-900 drop-shadow-sm">
-            {loading ? '—' : fmtInt(bigValue)}
-          </div>
+  const RightSingleStack = ({ title = '', bigValue = null, loading = false, blink = null }) => {
+      // treat as loading only if value is not a finite number
+      const isLoading = !Number.isFinite(bigValue)
+      const blinkClass = blink === 'up' ? 'blink-up' : (blink === 'down' ? 'blink-down' : '')
+      return (
+        <div className="w-full flex items-center justify-center">
+          <RightCard>
+            <div className="w-full flex flex-col items-center">
+              <div className="text-xl text-gray-800 font-bold">{title}</div>
+              <div className="mt-2 text-4xl md:text-5xl font-extrabold text-rose-900 drop-shadow-sm">
+                {isLoading ? '—' : <span className={blinkClass}>{fmtInt(bigValue)}</span>}
+              </div>
+            </div>
+          </RightCard>
         </div>
-      </RightCard>
-    </div>
-  )
+      )
+    }
 
-  // Right Dual Stack exactly as 24K and all
+
+
   const RightDualStack = ({ topTitle = '', topValue = null, bottomTitle = '', bottomValue = null, loading = false }) => (
     <div className="md:col-span-1 flex items-center justify-center">
       <div className="w-full max-w-xs space-y-3">
@@ -578,96 +808,86 @@ export default function GoldLiveRatesComponent({
     </div>
   )
 
-  // NEW: vertical right-side Silver stack — using RightCard for identical sizing
+  // RightVerticalSilver: show silver 1kg and 10gm & 1gm — add blink span to 1kg value
   const RightVerticalSilver = ({ loading = false, rate1kg = null }) => {
-    const tenGm = rate1kg ? (rate1kg / 100) * 1.03 : null
-    const oneGm = rate1kg ? (rate1kg / 1000) * 1.03 : null
+      const tenGm = rate1kg ? (rate1kg / 100) * 1.03 : null
+      const oneGm = rate1kg ? (rate1kg / 1000) * 1.03 : null
 
-    return (
-      <RightCard>
-        <div className="w-full flex flex-col items-center">
-          <div className="text-2xl text-gray-800 font-bold">Silver</div>
+      const silverBlinkClass = blinkSilverDir === 'up' ? 'blink-up' : (blinkSilverDir === 'down' ? 'blink-down' : '')
+      const isLoading = !Number.isFinite(rate1kg)
 
-          <div className="mt-3 w-full space-y-6">
-            
-            <div className="bg-gradient-to-r from-amber-300 via-amber-300 to-amber-200 rounded-lg p-3 ring-1 ring-amber-900/10">
-              <div className="text-lg text-gray-800 font-bold">1 gm <span className='text-sm font-medium'>(+GST 3%)</span></div>
-              <div className="mt-1 text-2xl md:text-3xl font-extrabold text-rose-900">
-                {loading ? '—' : fmtInt(oneGm)}
+      return (
+        <RightCard>
+          <div className="w-full flex flex-col items-center">
+            <div className="text-2xl text-gray-800 font-bold">Silver</div>
+
+            <div className="mt-3 w-full space-y-6">
+              <div className="bg-gradient-to-r from-amber-300 via-amber-300 to-amber-200 rounded-lg p-3 ring-1 ring-amber-900/10">
+                <div className="text-lg text-gray-800 font-bold">1 gm <span className='text-sm font-medium'>(+GST 3%)</span></div>
+                <div className="mt-1 text-2xl md:text-3xl font-extrabold text-rose-900">
+                  {isLoading ? '—' : <span className={silverBlinkClass}>{fmtInt(oneGm)}</span>}
+                </div>
               </div>
-            </div>
 
-            <div className="bg-gradient-to-r from-amber-300 via-amber-300 to-amber-200 rounded-lg p-3 ring-1 ring-amber-900/20">
-              <div className="text-lg text-gray-800 font-bold">10 gm <span className='text-sm font-medium'>(+GST 3%)</span></div>
-              <div className="mt-1 text-2xl md:text-3xl font-extrabold text-rose-900">
-                {loading ? '—' : fmtInt(tenGm)}
+              <div className="bg-gradient-to-r from-amber-300 via-amber-300 to-amber-200 rounded-lg p-3 ring-1 ring-amber-900/20">
+                <div className="text-lg text-gray-800 font-bold">10 gm <span className='text-sm font-medium'>(+GST 3%)</span></div>
+                <div className="mt-1 text-2xl md:text-3xl font-extrabold text-rose-900">
+                  {isLoading ? '—' : <span className={silverBlinkClass}>{fmtInt(tenGm)}</span>}
+                </div>
               </div>
-            </div>
 
-            <div className="bg-gradient-to-r from-amber-300 via-amber-300 to-amber-200 rounded-lg p-3 shadow-inner ring-1 ring-amber-900/20">
-              <div className="text-lg text-gray-800 font-bold">1 KG</div>
-              <div className="mt-1 text-2xl md:text-3xl font-extrabold text-rose-900">
-                {loading ? '—' : fmtInt(silverRate)}
+              <div className="bg-gradient-to-r from-amber-300 via-amber-300 to-amber-200 rounded-lg p-3 shadow-inner ring-1 ring-amber-900/20">
+                <div className="text-lg text-gray-800 font-bold">1 KG</div>
+                <div className="mt-1 text-2xl md:text-3xl font-extrabold text-rose-900">
+                  {isLoading ? '—' : <span className={silverBlinkClass}>{fmtInt(rate1kg)}</span>}
+                </div>
               </div>
             </div>
           </div>
-        </div>
-      </RightCard>
-    )
-  }
+        </RightCard>
+      )
+    }
 
 
-  /** Single half unit used inside the split card (matches the inner layout of RightSingleStack) */
-  const RightHalf = ({ title = '', bigValue = null, loading = false }) => {
-    // accept real boolean or string, and also treat non-finite bigValue as loading
-    const isLoading = loading === true || loading === 'true' || !Number.isFinite(bigValue)
-
+  // RightHalf used by RightDoubleStack — add optional blink prop support
+  const RightHalf = ({ title = '', bigValue = null, loading = false, blink = null }) => {
+    // rely only on whether bigValue is a finite number
+    const isLoading = !Number.isFinite(bigValue)
+    const blinkClass = blink === 'up' ? 'blink-up' : (blink === 'down' ? 'blink-down' : '')
     return (
       <div className="w-full flex flex-col items-center justify-center">
         <div className="text-xl text-gray-800 font-bold">{title}</div>
         <div className="mt-2 text-4xl md:text-5xl font-extrabold text-rose-900 drop-shadow-sm">
-          {isLoading ? '—' : fmtInt(bigValue)}
+          {isLoading ? '—' : <span className={blinkClass}>{fmtInt(bigValue)}</span>}
         </div>
       </div>
     )
   }
 
 
+  // RightDoubleStack: pass blink to left/right halves if provided
+  const RightDoubleStack2 = ({ left = {}, right = {}, showDivider = true }) => {
+    return (
+      <div className="w-full max-w-xl md:max-w-lg bg-gradient-to-r from-amber-500 via-amber-400 to-amber-300 rounded-2xl p-2.5 shadow-lg ring-1 ring-amber-900/30">
+        <div className="bg-white/95 rounded-xl p-3 flex flex-row items-stretch min-h-[114px]">
+          <div className="flex-1 flex items-center justify-center">
+            <RightHalf {...left} />
+          </div>
 
-  //   **
-  //  * New: RightDoubleStack in Gold Coin Single Stack
-  //  * left and right are objects: { title, bigValue, loading }
-  //  * showDivider: optional boolean to show/hide vertical divider
-  //  *
-  //  * Outer wrapper uses the exact same classes as RightSingleStack/RightCard,
-  //  * inner white container keeps the same min-h so overall height is identical.
-  //  */
-    const RightDoubleStack = ({ left = {}, right = {}, showDivider = true }) => {
-      return (
-        <div className="w-full max-w-xl md:max-w-lg bg-gradient-to-r from-amber-500 via-amber-400 to-amber-300 rounded-2xl p-2.5 shadow-lg ring-1 ring-amber-900/30">
-          <div className="bg-white/95 rounded-xl p-3 flex flex-row items-stretch min-h-[114px]">
-            <div className="flex-1 flex items-center justify-center">
-              <RightHalf {...left} />
-            </div>
+          {showDivider && <div className="w-px bg-gray-200 mx-5 my-2" />}
 
-            {showDivider && <div className="w-px bg-gray-200 mx-5 my-2" />}
-
-            <div className="flex-1 flex items-center justify-center">
-              <RightHalf {...right} />
-            </div>
+          <div className="flex-1 flex items-center justify-center">
+            <RightHalf {...right} />
           </div>
         </div>
-      );
-    };
+      </div>
+    );
+  };
 
   // ---------- UI ----------
-  // small helper to render status dot + label without changing spacing too much
   function StatusIndicator({ status }) {
-    // status: 'connecting' | 'live' | 'stable' | 'offline'
     let dotClasses = "w-3 h-3 rounded-full inline-block mr-2 shrink-0"
     let label = ''
-    
-    
     if (status === 'live') {
       dotClasses += " bg-emerald-400 animate-pulse"
       label = "Live"
@@ -681,7 +901,6 @@ export default function GoldLiveRatesComponent({
       dotClasses += " bg-gray-400"
       label = "Connecting"
     }
-
     return (
       <div className="flex items-center text-xs text-amber-100/90">
         <span className={dotClasses} aria-hidden="true" />
@@ -690,8 +909,34 @@ export default function GoldLiveRatesComponent({
     )
   }
 
+  // compute blink classes for main rate and spot
+  const mainRateBlinkClass = blinkRateDir === 'up' ? 'blink-up' : (blinkRateDir === 'down' ? 'blink-down' : '')
+  const spotBlink = blinkSpotDir // passed to RightHalf
+
   return (
     <div className="min-h-screen bg-gray-500 text-amber-100 p-1 flex items-start justify-center">
+      {/* Inline CSS for blink animations — only these classes are added; layout untouched */}
+      <style>{`
+        .blink-up {
+          animation: blinkUp ${BLINK_MS}ms ease-in-out;
+        }
+        .blink-down {
+          animation: blinkDown ${BLINK_MS}ms ease-in-out;
+        }
+        @keyframes blinkUp {
+          0% { color: inherit; transform: none; }
+          20% { color: #16a34a; transform: scale(1.04); }
+          60% { color: #16a34a; transform: scale(1.02); }
+          100% { color: inherit; transform: none; }
+        }
+        @keyframes blinkDown {
+          0% { color: inherit; transform: none; }
+          20% { color: #FF0000}
+          60% { color: #FF0000}
+          100% { color: inherit; transform: none; }
+        }
+      `}</style>
+
       <div className="w-full max-w-5xl">
         <div className="rounded-3xl overflow-hidden shadow-2xl" style={{ boxShadow: '0 10px 30px rgba(0,0,0,0.6)' }}>
           <div
@@ -719,19 +964,16 @@ export default function GoldLiveRatesComponent({
                   </svg>
                 )}
               </div>
-              
 
               <div className='flex flex-col truncate'>
                 <div>
                   {shopImageSrc ? (
-                    // image shown in place of shopName text (keeps spacing consistent)
                     <img
                       src={shopImageSrc}
                       alt={shopName}
                       className="h-8 md:h-12 w-full max-w-[160px] md:max-w-[540px] object-contain"
                       style={{ maxWidth: '540px' }}
                     />
-
                   ) : (
                     <div className="text-xl md:text-2xl font-bold font-aparajita truncate ">{shopName}</div>
                   )}
@@ -739,7 +981,6 @@ export default function GoldLiveRatesComponent({
 
                 <div>
                   {shopSalutation ? (
-                    // image shown in place of shopName text (keeps spacing consistent)
                     <img
                       src={shopSalutation}
                       alt={shopName}
@@ -754,25 +995,19 @@ export default function GoldLiveRatesComponent({
             </div>
 
             <div className="flex items-center gap-3">
-
-              {/* ---------- NEW: status indicator placed beside the existing "Next in" (keeps gap intact) ---------- */}
               <div className="flex flex-col items-end md:items-center gap-1">
                 <StatusIndicator status={connectionStatus} />
                 <div className="text-xs text-amber-100/70 pl-2 md:pl-5">
                   Next in: <span className="font-semibold text-amber-100">{remaining}s</span>
                 </div>
               </div>
-              {/* --------------------------------------------------------------------------------------------------- */}
             </div>
           </div>
 
           <div className="p-6 pt-4 bg-gradient-to-br from-gray-900 to-gray-800">
 
-            {/* WRAPPER: left stacked 24K/22K/20K/18K/16K and right vertical Silver + GoldCoin stacked */}
             <div className="grid grid-cols-1 md:grid-cols-3 items-start gap-4 max-w-full mx-1 mt-1">
-              {/* LEFT: stacked 24K, 22K, 20K, 18K, 16K */}
               <div className="md:col-span-2 space-y-4">
-                {/* ... (left column unchanged) */}
                 {/* 24K  */}
                 <div className="bg-gradient-to-r from-amber-400 via-amber-400 to-amber-400 rounded-2xl p-2.5 shadow-lg ring-1 ring-amber-900/30">
                   <div className="flex flex-col sm:flex-row gap-2.5">
@@ -780,7 +1015,7 @@ export default function GoldLiveRatesComponent({
                       <div className="text-md text-gray-800 font-semibold leading-tight"> <span className='font-bold text-2xl'>24K</span> (99.5) (1 gm)</div>
                       <div className="mt-1">
                         <div className="text-4xl md:text-5xl font-extrabold text-rose-900 drop-shadow-sm leading-tight">
-                          {loading ? '—' : fmtInt(rate / 10)}
+                          {loading ? '—' : <span className={mainRateBlinkClass}>{fmtInt(rate / 10)}</span>}
                         </div>
                       </div>
                     </div>
@@ -789,7 +1024,12 @@ export default function GoldLiveRatesComponent({
                       <div className="text-md text-gray-800 font-semibold leading-tight">10 gm</div>
                       <div className="mt-2">
                         <div className="text-4xl md:text-5xl font-extrabold text-rose-900 drop-shadow-sm leading-tight">
-                          {loading ? '—' : fmtInt(rate)}
+                          {loading ? '—' : (
+                            // only the number blinks
+                            <span className={mainRateBlinkClass}>
+                              {fmtInt(rate)}
+                            </span>
+                          )}
                         </div>
                       </div>
                     </div>
@@ -803,7 +1043,7 @@ export default function GoldLiveRatesComponent({
                       <div className="text-md text-gray-800 font-semibold leading-tight"> <span className='font-bold text-2xl'>22K</span> (91.6) (1 gm)</div>
                       <div className="mt-1">
                         <div className="text-4xl md:text-5xl font-extrabold text-rose-900 drop-shadow-sm leading-tight">
-                          {loading ? '—' : fmtInt(rate22K10gm / 10)}
+                          {loading ? '—' : <span className={blink22Dir === 'up' ? 'blink-up' : (blink22Dir === 'down' ? 'blink-down' : '')}>{fmtInt(rate22K10gm / 10)}</span>}
                         </div>
                       </div>
                     </div>
@@ -812,7 +1052,8 @@ export default function GoldLiveRatesComponent({
                       <div className="text-md text-gray-800 font-semibold leading-tight">10 gm</div>
                       <div className="mt-2">
                         <div className="text-4xl md:text-5xl font-extrabold text-rose-900 drop-shadow-sm leading-tight">
-                          {loading ? '—' : fmtInt(rate22K10gm)}
+                          {loading ? '—' : <span className={blink22Dir === 'up' ? 'blink-up' : (blink22Dir === 'down' ? 'blink-down' : '')}>{fmtInt(rate22K10gm)}</span>}
+
                         </div>
                       </div>
                     </div>
@@ -826,7 +1067,7 @@ export default function GoldLiveRatesComponent({
                       <div className="text-md text-gray-800 font-semibold leading-tight"> <span className='font-bold text-2xl'>20K</span> (83.3) (1 gm)</div>
                       <div className="mt-1">
                         <div className="text-4xl md:text-5xl font-extrabold text-rose-900 drop-shadow-sm leading-tight">
-                          {loading ? '—' : fmtInt(rate20K10gm / 10)}
+                          {loading ? '—' : <span className={blink20Dir === 'up' ? 'blink-up' : (blink20Dir === 'down' ? 'blink-down' : '')}>{fmtInt(rate20K10gm / 10)}</span>}
                         </div>
                       </div>
                     </div>
@@ -835,21 +1076,21 @@ export default function GoldLiveRatesComponent({
                       <div className="text-md text-gray-800 font-semibold leading-tight">10 gm</div>
                       <div className="mt-2">
                         <div className="text-4xl md:text-5xl font-extrabold text-rose-900 drop-shadow-sm leading-tight">
-                          {loading ? '—' : fmtInt(rate20K10gm)}
+                          {loading ? '—' : <span className={blink20Dir === 'up' ? 'blink-up' : (blink20Dir === 'down' ? 'blink-down' : '')}>{fmtInt(rate20K10gm)}</span>}
                         </div>
                       </div>
                     </div>
                   </div>
                 </div>
 
-                {/* 18K (moved under 20K to align directly below it) */}
+                {/* 18K */}
                 <div className="bg-gradient-to-r from-amber-400 via-amber-400 to-amber-400 rounded-2xl p-2.5 shadow-lg ring-1 ring-amber-900/30">
                   <div className="flex flex-col sm:flex-row gap-2.5">
                     <div className="sm:w-1/2 bg-white/95 rounded-xl p-2 px-3 flex flex-col justify-center min-h-14 md:min-h-20">
                       <div className="text-md text-gray-800 font-semibold leading-tight"> <span className='font-bold text-2xl'>18K</span> (75.0) (1 gm)</div>
                       <div className="mt-1">
                         <div className="text-4xl md:text-5xl font-extrabold text-rose-900 drop-shadow-sm leading-tight">
-                          {loading ? '—' : fmtInt(rate18K10gm / 10)}
+                          {loading ? '—' : <span className={blink18Dir === 'up' ? 'blink-up' : (blink18Dir === 'down' ? 'blink-down' : '')}>{fmtInt(rate18K10gm / 10)}</span>}
                         </div>
                       </div>
                     </div>
@@ -858,21 +1099,21 @@ export default function GoldLiveRatesComponent({
                       <div className="text-md text-gray-800 font-semibold leading-tight">10 gm</div>
                       <div className="mt-2">
                         <div className="text-4xl md:text-5xl font-extrabold text-rose-900 drop-shadow-sm leading-tight">
-                          {loading ? '—' : fmtInt(rate18K10gm)}
+                          {loading ? '—' : <span className={blink18Dir === 'up' ? 'blink-up' : (blink18Dir === 'down' ? 'blink-down' : '')}>{fmtInt(rate18K10gm)}</span>}
                         </div>
                       </div>
                     </div>
                   </div>
                 </div>
 
-                {/* 16K (moved under 18K to keep left column consistent) */}
+                {/* 16K */}
                 <div className="bg-gradient-to-r from-amber-400 via-amber-400 to-amber-400 rounded-2xl p-2.5 shadow-lg ring-1 ring-amber-900/30">
                   <div className="flex flex-col sm:flex-row gap-2.5">
                     <div className="sm:w-1/2 bg-white/95 rounded-xl p-2 px-3 flex flex-col justify-center min-h-14 md:min-h-20">
                       <div className="text-md text-gray-800 font-semibold leading-tight"> <span className='font-bold text-2xl'>16K</span> (66.7) (1 gm)</div>
                       <div className="mt-1">
                         <div className="text-4xl md:text-5xl font-extrabold text-rose-900 drop-shadow-sm leading-tight">
-                          {loading ? '—' : fmtInt(rate16K10gm / 10)}
+                          {loading ? '—' : <span className={blink16Dir === 'up' ? 'blink-up' : (blink16Dir === 'down' ? 'blink-down' : '')}>{fmtInt(rate16K10gm / 10)}</span>}
                         </div>
                       </div>
                     </div>
@@ -881,7 +1122,7 @@ export default function GoldLiveRatesComponent({
                       <div className="text-md text-gray-800 font-semibold leading-tight">10 gm</div>
                       <div className="mt-2">
                         <div className="text-4xl md:text-5xl font-extrabold text-rose-900 drop-shadow-sm leading-tight">
-                          {loading ? '—' : fmtInt(rate16K10gm)}
+                          {loading ? '—' : <span className={blink16Dir === 'up' ? 'blink-up' : (blink16Dir === 'down' ? 'blink-down' : '')}>{fmtInt(rate16K10gm)}</span>}
                         </div>
                       </div>
                     </div>
@@ -889,16 +1130,49 @@ export default function GoldLiveRatesComponent({
                 </div>
               </div>
 
-              {/* RIGHT: column that holds Silver and Gold Coin stacked with identical width */}
+              {/* RIGHT */}
               <div className="md:col-span-1 flex flex-col items-center justify-start gap-3.5">
                 <RightVerticalSilver loading={loading} rate1kg={silverRate} />
-                <RightSingleStack title='Gold Coin' bigValue={goldcoin} loading={loading} />
-                <RightDoubleStack
-                  left={{ title: 'Spot Gold', bigValue: spotGoldRate, loading: !Number.isFinite(spotGoldRate) }}
-                  right={{ title: 'Dollar', bigValue: dollarRate, loading: (dollarRate) }}
+                <RightSingleStack title='Gold Coin' bigValue={goldcoin} loading={loading} blink={blinkGoldCoinDir} />
+                <RightDoubleStack2
+                  left={{ title: 'Spot Gold', bigValue: spotGoldRate, loading: !Number.isFinite(spotGoldRate), blink: blinkSpotDir }}
+                  right={{ title: 'Dollar', bigValue: dollarRate, loading: !Number.isFinite(dollarRate), blink: blinkDollarDir }}
                   showDivider={true}
                 />
+              </div>
+            </div>
 
+            {/* Chart */}
+            <div className="mt-6 bg-gray-900/60 border border-amber-800 rounded-2xl p-4 shadow-lg">
+              <div className="text-amber-200 font-bold mb-3 flex items-center justify-between">
+                <div>Live Gold Rate Plotting (last {displayedData.length} points)</div>
+                <div className="flex items-center gap-2">
+                  {['1D', '1M', '1Y', 'ALL'].map(r => (
+                    <button
+                      key={r}
+                      onClick={() => setSelectedRange(r)}
+                      className={
+                        "text-xs px-2 py-1 rounded-md font-semibold " +
+                        (selectedRange === r ? "bg-rose-600 text-white" : "bg-gray-800/40 text-amber-200/80")
+                      }
+                      aria-pressed={selectedRange === r}
+                    >
+                      {r === 'ALL' ? 'All' : r}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div style={{ height: 220 }}>
+                <ResponsiveContainer width="100%" height="100%">
+                  <LineChart data={displayedData} margin={{ top: 6, right: 12, left: 0, bottom: 6 }}>
+                    <CartesianGrid strokeDasharray="3 3" />
+                    <XAxis dataKey="time" minTickGap={20} />
+                    <YAxis domain={[dataMin => (dataMin ? Math.floor(dataMin * 0.995) : 'auto'), dataMax => (dataMax ? Math.ceil(dataMax * 1.005) : 'auto')]} />
+                    <Tooltip formatter={(value) => [fmtInt(value), 'Rate']} labelFormatter={(label) => `Time: ${label}`} />
+                    <Line type="monotone" dataKey="rate" stroke="#ff6b6b" strokeWidth={2} dot={false} isAnimationActive={false} />
+                  </LineChart>
+                </ResponsiveContainer>
               </div>
             </div>
 
@@ -955,7 +1229,6 @@ export default function GoldLiveRatesComponent({
                 <button onClick={applyRefresh} className="ml-2 bg-rose-600 hover:bg-rose-700 text-white text-sm px-3 py-1 rounded-md shadow">Apply</button>
               </div>
 
-              {/* NEW: Responsive Making input alignment */}
               {showMaking && (
                 <div className="flex items-center gap-2 w-full md:w-auto justify-end md:justify-center">
                   <label className="text-md font-semibold text-amber-200/80">Making</label>
@@ -969,7 +1242,6 @@ export default function GoldLiveRatesComponent({
                   />
                 </div>
               )}
-
 
               <div className="w-full md:w-auto text-right text-sm md:text-base md:text-right">
                 Last updated:{" "}
