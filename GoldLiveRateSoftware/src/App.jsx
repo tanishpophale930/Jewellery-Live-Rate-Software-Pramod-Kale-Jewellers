@@ -12,7 +12,7 @@ function App() {
         shopName = 'प्रमोद रामभाऊ काळे ज्वेलर्स' 
         shopImageSrc = "../प्रमोद रामभाऊ काळे ज्वेलर्स, पुलगांव.png"
         shopSalutation = "../Layer.png"
-        defaultRefreshSeconds = {15}
+        defaultRefreshSeconds = {5}
       />      
     </>
   )

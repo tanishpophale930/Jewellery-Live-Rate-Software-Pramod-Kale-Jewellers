@@ -16,7 +16,7 @@ export default function GoldLiveRatesComponent({
   shopName = "",
   shopImageSrc = null,
   shopSalutation = null,
-  defaultRefreshSeconds = 60
+  defaultRefreshSeconds = 5
 }) {
   const ENDPOINT =
     "https://bcast.sagarjewellers.co.in:7768/VOTSBroadcastStreaming/Services/xml/GetLiveRateByTemplateID/sagar?_=1761132425086"
@@ -93,7 +93,7 @@ export default function GoldLiveRatesComponent({
   // refresh controls
   const [refreshVal, setRefreshVal] = useState('')
   const [refreshUnit, setRefreshUnit] = useState('seconds')
-  const [refreshMs, setRefreshMs] = useState(() => (defaultRefreshSeconds ?? 15) * 1000)
+  const [refreshMs, setRefreshMs] = useState(() => (defaultRefreshSeconds ?? 5) * 1000)
 
   // Making input
   const [makingVal, setMakingVal] = useState('')
@@ -598,7 +598,7 @@ export default function GoldLiveRatesComponent({
   function applyRefresh() {
     let v = Number(refreshVal)
     if (!Number.isFinite(v) || v <= 0) {
-      v = defaultRefreshSeconds ?? 15
+      v = defaultRefreshSeconds ?? 5
       setRefreshVal('')
       setRefreshUnit('seconds')
       localStorage.removeItem(LS_REFRESH_VAL_KEY)
@@ -631,7 +631,7 @@ export default function GoldLiveRatesComponent({
 
       const sv = localStorage.getItem(LS_REFRESH_VAL_KEY)
       const su = localStorage.getItem(LS_REFRESH_UNIT_KEY)
-      let initialMs = (defaultRefreshSeconds ?? 15) * 1000
+      let initialMs = (defaultRefreshSeconds ?? 5) * 1000
       if (sv !== null) {
         const parsed = Number(sv)
         const unit = su || 'seconds'
