@@ -9,6 +9,7 @@ import {
   CartesianGrid,
   ResponsiveContainer,
 } from "recharts";
+import JewelleryPricingTable from "./JewelleryPricingTable";
 
 /**
  * GoldLiveRatesComponent
@@ -1643,6 +1644,8 @@ export default function GoldLiveRatesComponent({
                 />
               </div>
             </div>
+
+            <JewelleryPricingTable makingVal={makingVal} showMaking={showMaking} />
 
             {/* Chart */}
             <div className="mt-6 bg-gray-900/60 border border-amber-800 rounded-2xl p-4 shadow-lg">

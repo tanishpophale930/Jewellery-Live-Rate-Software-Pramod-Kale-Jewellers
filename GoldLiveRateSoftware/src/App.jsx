@@ -1,5 +1,4 @@
 import './App.css'
-import GoldLiveRatesComponentOld from './Components/GoldLiveRatesComponentOld'
 import GoldLiveRatesComponent from './Components/GoldLiveRatesComponent'
 
 
