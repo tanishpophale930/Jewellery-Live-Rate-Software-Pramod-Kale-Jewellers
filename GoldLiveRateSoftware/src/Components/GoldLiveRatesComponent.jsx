@@ -141,7 +141,7 @@ export default function GoldLiveRatesComponent({
   );
 
   // Making input
-  const [makingVal, setMakingVal] = useState("");
+  const [makingVal, setMakingVal] = useState("5250");
 
   // countdown
   const [remaining, setRemaining] = useState(Math.ceil(refreshMs / 1000));
@@ -717,6 +717,14 @@ export default function GoldLiveRatesComponent({
     }
   }
 
+
+  // makingNumber
+  const makingNumber = (function () {
+    const n = Number(makingVal);
+    if (Number.isFinite(n) && n >= 0) return n;
+    return 5250;
+  })();
+
   // build derived table values (unchanged)
   function buildTable(base) {
     if (!base || !Number.isFinite(base)) return null;
@@ -738,14 +746,8 @@ export default function GoldLiveRatesComponent({
     return rows.map((r) => ({ ...r, ratePer10: r.rate / 10 }));
   }
 
-  // makingNumber (unchanged)
-  const makingNumber = (function () {
-    const n = Number(makingVal);
-    if (Number.isFinite(n) && n >= 0) return n;
-    return 5250;
-  })();
 
-  // derived rates (unchanged)
+  // derived rates
   const rate22K10gm = rate ? (rate + makingNumber) / 1.1 : null;
   const rate20K10gm = rate ? rate / 1.1 : null;
   const rate18K10gm = rate ? (0.95 * rate) / 1.1 : null;
