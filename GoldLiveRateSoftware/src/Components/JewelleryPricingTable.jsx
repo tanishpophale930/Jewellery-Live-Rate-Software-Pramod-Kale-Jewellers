@@ -11,6 +11,12 @@ function fmtInt(val) {
   const n = Math.round(Number(val));
   return n.toLocaleString("en-IN");
 }
+function fmtWeight(val) {
+  if (val === null || val === undefined || Number.isNaN(val)) return "—";
+  const n = Number(val);
+  const hasFraction = Math.round(n * 100) % 100 !== 0;
+  return n.toLocaleString("en-IN", { minimumFractionDigits: hasFraction ? 2 : 0, maximumFractionDigits: 2 });
+}
 function parseGoldRate(text) {
   const lines = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
   const goldLine = lines.find((l) => /GOLD NAGPUR 99\.5 RTGS \(Rate 50 gm\)/i.test(l));
@@ -291,6 +297,18 @@ export default function JewelleryPricingTable({ makingVal = "5250", showMaking =
     return Math.round(tenPercent);
   };
 
+  // --- Totals calculation (sums across rows) ---
+  // We include rows that have a numeric weight (empty weight is ignored).
+  const totalWeight = rows.reduce((sum, r) => {
+    const w = parseFloat(r.weight);
+    return sum + (isNaN(w) ? 0 : w);
+  }, 0);
+
+  const total100 = rows.reduce((sum, r) => sum + calculateRowPrice(r, 100), 0);
+  const total150 = rows.reduce((sum, r) => sum + calculateRowPrice(r, 150), 0);
+  const totalGST = rows.reduce((sum, r) => sum + calculateRowGST(r), 0);
+  const totalMakingCharges = rows.reduce((sum, r) => sum + calculateRowMakingCharges(r), 0);
+
   // --- Dynamic UI Logic ---
   let blinkClass = "border-neutral-700 bg-neutral-800/50";
   if (isBlinking) {
@@ -421,6 +439,24 @@ export default function JewelleryPricingTable({ makingVal = "5250", showMaking =
                 );
               })}
             </tbody>
+
+            {/* Totals row: remains at the end even when rows are added */}
+            <tfoot>
+              <tr className="bg-gray-900/60">
+                <td className="px-4 py-3 font-bold text-amber-100 border-t border-amber-800">Total</td>
+                <td className="px-4 py-3 font-bold text-amber-100 border-t border-amber-800">{fmtWeight(totalWeight)}</td>
+                <td className="px-4 py-3 text-amber-100 border-t border-amber-800">{/* carat column intentionally blank */}</td>
+                <td className="px-4 py-3 text-amber-100 border-t border-amber-800">{/* rate/gm not applicable */}—</td>
+                <td className="px-4 py-3 text-amber-100 border-t border-amber-800">{/* making % not applicable */}</td>
+                <td className="px-4 py-3 font-bold text-amber-100 border-t border-amber-800">₹{fmtInt(total100)}</td>
+                <td className="px-4 py-3 font-bold text-amber-100 border-t border-amber-800">₹{fmtInt(total150)}</td>
+                <td className="px-4 py-3 font-bold text-amber-100 border-t border-amber-800">₹{fmtInt(totalGST)}</td>
+                {showMaking && (
+                  <td className="px-4 py-3 font-bold text-amber-100 border-t border-amber-800">₹{fmtInt(totalMakingCharges)}</td>
+                )}
+              </tr>
+            </tfoot>
+
           </table>
         </div>
       </div>
