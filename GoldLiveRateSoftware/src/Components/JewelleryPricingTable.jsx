@@ -98,7 +98,7 @@ export default function JewelleryPricingTable({ makingVal = "5250", showMaking =
   const [carat, setCarat] = useState("22K");
 
   const caratOptions = ["24K", "22K", "20K", "18K", "16K"];
-  const makingPercentOptions = ["10%", "12%", "3%", "3.50%", "5%"];
+  const makingPercentOptions = ["3%", "3.50%", "5%", "10%", "12%"];
 
   // --- 4. Live Calculation (Nagpur Formula) ---
   const getDerivedRates = useCallback(() => {
@@ -330,7 +330,7 @@ export default function JewelleryPricingTable({ makingVal = "5250", showMaking =
       {/* Pricing Table */}
       <div className="mt-6 bg-gray-900/60 border border-amber-800 rounded-2xl p-4 shadow-lg">
         <div className="flex justify-between items-center mb-3">
-          <h3 className="text-amber-300 font-bold text-lg">Item Price Calculator</h3>
+          <h3 className="text-amber-300 font-bold text-lg">Item Price Calculator Table</h3>
           <div className="space-x-2">
             <button onClick={addRow} className="px-3 py-1 bg-neutral-700 rounded">Add Row</button>
             <button onClick={resetRows} className="px-3 py-1 bg-red-700 rounded font-bold active:scale-95">Reset Rows</button>
@@ -378,7 +378,7 @@ export default function JewelleryPricingTable({ makingVal = "5250", showMaking =
                         value={row.weight}
                         onChange={(e) => updateRow(idx, { weight: e.target.value })}
                         onKeyDown={handleEnterKey}
-                        className="w-20 p-1 rounded-lg bg-neutral-800 border border-neutral-600 outline-none"
+                        className="w-16 p-1 rounded-lg bg-neutral-800 border border-neutral-600 outline-none"
                         placeholder="0.00"
                       />
                     </td>
@@ -391,7 +391,7 @@ export default function JewelleryPricingTable({ makingVal = "5250", showMaking =
                         setCarat(v);           // <-- update global displayed carat
                       }}
                       onKeyDown={handleEnterKey}  
-                      className="w-full p-1 rounded bg-neutral-800 border border-neutral-600 text-[10px]">
+                      className="w-16 p-1 rounded bg-neutral-800 border border-neutral-600 text-[15px]">
                         {caratOptions.map(c => <option key={c} value={c}>{c}</option>)}
                       </select>
                     </td>
@@ -404,7 +404,7 @@ export default function JewelleryPricingTable({ makingVal = "5250", showMaking =
                     <td className="px-4 py-3 font-medium text-amber-100 border-b border-amber-800">
                       <select value={row.makingPercent} onChange={(e) => updateRow(idx, { makingPercent: e.target.value })}
                         onKeyDown={handleEnterKey}    
-                        className="w-full p-1 rounded bg-neutral-800 border border-neutral-600 text-[10px]">
+                        className="w-16 p-1 rounded bg-neutral-800 border border-neutral-600 text-[15px]">
                         <option value="">%</option>
                         {makingPercentOptions.map((mp) => <option key={mp} value={mp}>{mp}</option>)}
                       </select>
