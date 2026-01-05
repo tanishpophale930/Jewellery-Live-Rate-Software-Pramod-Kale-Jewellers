@@ -11,12 +11,14 @@ function fmtInt(val) {
   const n = Math.round(Number(val));
   return n.toLocaleString("en-IN");
 }
+
 function fmtWeight(val) {
   if (val === null || val === undefined || Number.isNaN(val)) return "—";
   const n = Number(val);
   const hasFraction = Math.round(n * 100) % 100 !== 0;
   return n.toLocaleString("en-IN", { minimumFractionDigits: hasFraction ? 2 : 0, maximumFractionDigits: 2 });
 }
+
 function parseGoldRate(text) {
   const lines = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
   const goldLine = lines.find((l) => /GOLD NAGPUR 99\.5 RTGS \(Rate 50 gm\)/i.test(l));
@@ -63,7 +65,7 @@ function parseGoldRate(text) {
   return numericGold;
 }
 
-export default function JewelleryPricingTable({ makingVal = "5250", showMaking = false }) {
+export default function JewelleryPricingTable({ makingVal = "5250"}) {
   // --- 1. Load Initial State from Cache ---
   const getCachedData = () => {
     try {
@@ -105,6 +107,9 @@ export default function JewelleryPricingTable({ makingVal = "5250", showMaking =
 
   const caratOptions = ["24K", "22K", "20K", "18K", "16K"];
   const makingPercentOptions = ["3%", "3.50%", "5%", "10%", "12%"];
+
+  // NEW: show/hide making input when clicking the logo
+  const [showMaking, setShowMaking] = useState(false);
 
   // --- 4. Live Calculation (Nagpur Formula) ---
   const getDerivedRates = useCallback(() => {
@@ -354,6 +359,19 @@ export default function JewelleryPricingTable({ makingVal = "5250", showMaking =
             <button onClick={resetRows} className="px-3 py-1 bg-red-700 rounded font-bold active:scale-95">Reset Rows</button>
             <button onClick={() => fetchRate()} className="px-3 py-1 bg-amber-500 text-neutral-900 rounded font-bold active:scale-95">
               {loading ? "Updating..." : "Refresh Rate"}
+            </button>
+            <button className="px-3 py-1 bg-red-700 rounded font-bold active:scale-95" onClick={() => setShowMaking((prev) => !prev)}
+                role="button"
+                tabIndex={0}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault();
+                    setShowMaking((prev) => !prev);
+                  }
+                  }}
+                title="Toggle Making input"
+                aria-pressed={showMaking}>
+                  Add MC
             </button>
           </div>
         </div>
