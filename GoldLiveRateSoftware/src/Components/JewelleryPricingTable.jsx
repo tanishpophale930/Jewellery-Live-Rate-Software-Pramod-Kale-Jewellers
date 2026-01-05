@@ -445,10 +445,34 @@ export default function JewelleryPricingTable({ makingVal = "5250"}) {
                         {makingPercentOptions.map((mp) => <option key={mp} value={mp}>{mp}</option>)}
                       </select>
                     </td>
-
-                    <td className="px-4 py-3 font-medium text-amber-100 border-b border-amber-800">₹{fmtInt(total100)}</td>
-                    <td className="px-4 py-3 font-medium text-amber-100 border-b border-amber-800">₹{fmtInt(total150)}</td>
-                    <td className="px-4 py-3 font-medium text-amber-100 border-b border-amber-800">₹{fmtInt(gst)}</td>
+                    <td className="px-4 py-3 border-b border-amber-800">
+                      {total100 > 0 ? (
+                        <span
+                          className="inline-block min-w-[90px] text-center
+                                    bg-amber-500/10 text-amber-200 ring-1 ring-amber-600/30
+                                    rounded-lg px-3 py-1 font-semibold"
+                          aria-label={`Total with 100 Rs hallmark ${total100}`}
+                        >
+                          ₹{fmtInt(total100)}
+                        </span>
+                      ) : (
+                        <span className="text-neutral-500">—</span>
+                      )}
+                    </td>
+                    <td className="px-4 py-3 font-medium text-amber-100 border-b border-amber-800">
+                      {total150 > 0 ? (
+                        <span className="inline-block min-w-[90px] text-center">₹{fmtInt(total150)}</span>
+                      ) : (
+                        <span className="text-neutral-500">—</span>
+                      )}
+                    </td>
+                    <td className="px-4 py-3 font-medium text-amber-100 border-b border-amber-800">
+                      {gst > 0 ? (
+                        <span className="inline-block min-w-[90px] text-center">₹{fmtInt(gst)}</span>
+                      ) : (
+                        <span className="text-neutral-500">—</span>
+                      )}
+                    </td>
                     {showMaking && (
                     <td className="px-4 py-3 font-medium text-amber-100 border-b border-amber-800">₹{fmtInt(makingCharges)}</td>
                     )}
@@ -466,9 +490,31 @@ export default function JewelleryPricingTable({ makingVal = "5250"}) {
                 <td className="px-4 py-3 text-amber-100 border-t border-amber-800">{/* carat column intentionally blank */}</td>
                 <td className="px-4 py-3 text-amber-100 border-t border-amber-800">{/* rate/gm not applicable */}—</td>
                 <td className="px-4 py-3 text-amber-100 border-t border-amber-800">{/* making % not applicable */}</td>
-                <td className="px-4 py-3 font-bold text-amber-100 border-t border-amber-800">₹{fmtInt(total100)}</td>
-                <td className="px-4 py-3 font-bold text-amber-100 border-t border-amber-800">₹{fmtInt(total150)}</td>
-                <td className="px-4 py-3 font-bold text-amber-100 border-t border-amber-800">₹{fmtInt(totalGST)}</td>
+                <td className="px-4 py-3 border-t border-amber-800">
+                  {total100 > 0 ? (
+                    <span className="inline-block min-w-[90px] text-center
+                                    bg-amber-500/10 text-amber-200 ring-1 ring-amber-600/30
+                                    rounded-lg px-3 py-1 font-semibold">
+                      ₹{fmtInt(total100)}
+                    </span>
+                  ) : (
+                    <span className="text-neutral-500">—</span>
+                  )}
+                </td>
+                <td className="px-4 py-3 font-bold text-amber-100 border-t border-amber-800">
+                  {total150 > 0 ? (
+                    <span className="inline-block min-w-[90px] text-center">₹{fmtInt(total150)}</span>
+                  ) : (
+                    <span className="text-neutral-500">—</span>
+                  )}
+                </td>
+                <td className="px-4 py-3 font-bold text-amber-100 border-t border-amber-800">
+                  {totalGST > 0 ? (
+                    <span className="inline-block min-w-[90px] text-center">₹{fmtInt(totalGST)}</span>
+                  ) : (
+                    <span className="text-neutral-500">—</span>
+                  )}
+                </td>
                 {showMaking && (
                   <td className="px-4 py-3 font-bold text-amber-100 border-t border-amber-800">₹{fmtInt(totalMakingCharges)}</td>
                 )}
