@@ -177,20 +177,19 @@ export default function JewelleryPricingTable({ makingVal = "5250"}) {
   // (Optional) you can wire up an interval like in your original code if desired.
 
 
-    // Improved Enter handler:
-  // - If Enter pressed while already on a SELECT: allow default (so arrow keys/Enter work)
-  // - If Enter moves focus to a SELECT: focus it and attempt to open the dropdown
+  // handleEnterKey with this function
   const handleEnterKey = (e) => {
-    if (e.key !== "Enter") return;
+    // Allow action only for Enter or Shift (Shift key alone moves focus forward)
+    if (e.key !== "Enter" && e.key !== "Shift") return;
 
-    // If the currently focused element is a SELECT, let browser handle Enter (open/select)
     const active = document.activeElement;
-    if (active && active.tagName === "SELECT") {
-      // do nothing — allow arrow keys and Enter to operate the select
+
+    // If Enter pressed while on a <select>, let browser handle it (same as before)
+    if (e.key === "Enter" && active && active.tagName === "SELECT") {
       return;
     }
 
-    // Otherwise we will move focus to next control (and open select if that's the next)
+    // For both Enter (when not on select) and Shift, perform the same "move to next control" behavior
     e.preventDefault();
 
     const table =
@@ -204,42 +203,33 @@ export default function JewelleryPricingTable({ makingVal = "5250"}) {
 
     if (!focusables.length) return;
 
-    // use document.activeElement (safer with React re-renders)
     let idx = focusables.indexOf(document.activeElement);
     if (idx === -1 && e.currentTarget) idx = focusables.indexOf(e.currentTarget);
 
     const next = focusables[(idx + 1) % focusables.length];
     if (!next) return;
 
-    // Delay allowing React updates to flush, then focus and (if select) open it
+    // Delay to allow React to flush updates, then focus + open select if applicable
     setTimeout(() => {
       try {
         next.focus();
 
-        // If it's an input, select its contents for quick typing
         if (next.tagName === "INPUT" && typeof next.select === "function") next.select();
 
-        // If it's a <select>, attempt to open its dropdown so arrow keys and Enter work immediately.
         if (next.tagName === "SELECT") {
-          // Preferred modern API (Chrome 93+/some browsers)
           if (typeof next.showPicker === "function") {
-            try { next.showPicker(); } catch (err) { /* ignore if unsupported */ }
+            try { next.showPicker(); } catch (err) { /* ignore */ }
           } else {
-            // Fallback: dispatch a mouse event which in many browsers opens the dropdown
             const ev = new MouseEvent("mousedown", { bubbles: true, cancelable: true });
             next.dispatchEvent(ev);
-            // In some edge-cases, a click() helps:
             try { next.click(); } catch (err) { /* ignore */ }
           }
         }
       } catch (err) {
-        // swallow — focusing is best-effort
-        // console.debug("focus move failed", err);
+        // best-effort focusing — swallow errors
       }
     }, 0);
   };
-
-
 
 
   // --- Rows helpers ---
