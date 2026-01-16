@@ -1,9 +1,9 @@
 import React, { useState, useEffect, useRef, useCallback } from "react";
 
-// --- Constants & Keys ---
+// ---  (unchanged constants & helpers) ---
 const ENDPOINT = "https://bcast.sagarjewellers.co.in:7768/VOTSBroadcastStreaming/Services/xml/GetLiveRateByTemplateID/sagar?_=1761132425086";
 const LS_LAST_RATE_KEY = "gold_last_rate_v1";
-const REFRESH_INTERVAL_MS = 5000; // Force update every 5 seconds
+const REFRESH_INTERVAL_MS = 5000;
 const BLINK_MS = 1000;
 
 function fmtInt(val) {
@@ -11,19 +11,16 @@ function fmtInt(val) {
   const n = Math.round(Number(val));
   return n.toLocaleString("en-IN");
 }
-
 function fmtWeight(val) {
   if (val === null || val === undefined || Number.isNaN(val)) return "—";
   const n = Number(val);
   const hasFraction = Math.round(n * 100) % 100 !== 0;
   return n.toLocaleString("en-IN", { minimumFractionDigits: hasFraction ? 2 : 0, maximumFractionDigits: 2 });
 }
-
 function parseGoldRate(text) {
   const lines = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
   const goldLine = lines.find((l) => /GOLD NAGPUR 99\.5 RTGS \(Rate 50 gm\)/i.test(l));
-  if (!goldLine) 
-    throw new Error("Target product line not found in response");
+  if (!goldLine) throw new Error("Target product line not found in response");
 
   let extracted = null;
   const cols = goldLine
@@ -51,22 +48,17 @@ function parseGoldRate(text) {
   if (!extracted) {
     const allNums = goldLine.match(/\d+(?:\.\d+)?/g) || [];
     if (allNums.length) {
-      extracted = allNums.reduce(
-        (a, b) => (parseFloat(b) > parseFloat(a) ? b : a),
-        allNums[0]
-      );
+      extracted = allNums.reduce((a, b) => (parseFloat(b) > parseFloat(a) ? b : a), allNums[0]);
     }
   }
 
-  if (!extracted)
-    throw new Error("Could not parse numeric rate from GOLD line");
+  if (!extracted) throw new Error("Could not parse numeric rate from GOLD line");
 
-  const numericGold = Number(extracted);
-  return numericGold;
+  return Number(extracted);
 }
 
-export default function JewelleryPricingTable({ makingVal = "5250"}) {
-  // --- 1. Load Initial State from Cache ---
+export default function JewelleryPricingTable({ makingVal = "5250" }) {
+  // --- cached data load (unchanged) ---
   const getCachedData = () => {
     try {
       const lastRaw = localStorage.getItem(LS_LAST_RATE_KEY);
@@ -77,27 +69,29 @@ export default function JewelleryPricingTable({ makingVal = "5250"}) {
     } catch (e) { return null; }
     return null;
   };
-
   const cached = getCachedData();
 
-  // --- 2. States ---
+  // --- 2. States (added overrides) ---
   const [rate, setRate] = useState(cached ? Number(cached.rate) : null);
   const [loading, setLoading] = useState(!cached);
   const [initialized, setInitialized] = useState(Boolean(cached));
   const [lastUpdated, setLastUpdated] = useState(cached?.ts ? new Date(Number(cached.ts)) : null);
-  
-  // Rows state: each row has weight, carat, makingPercent
+
+  // Rows
   const defaultRowCount = 5;
   const nextIdRef = useRef(1);
   const makeEmptyRow = () => ({ id: nextIdRef.current++, weight: "", carat: "22K", makingPercent: "10%" });
   const makeRows = (n) => Array.from({ length: n }, () => makeEmptyRow());
-
   const [rows, setRows] = useState(() => makeRows(defaultRowCount));
 
   const [isBlinking, setIsBlinking] = useState(false);
   const [blinkDir, setBlinkDir] = useState(null);
 
-  // --- 3. Refs for Interval Control ---
+  // overrides: per-carat user-input rate/gm (applies to all rows with that carat)
+  // key: carat string ("22K"), value: numeric rate/gm
+  const [overrides, setOverrides] = useState({});
+
+  // --- refs ---
   const initializedRef = useRef(Boolean(cached));
   const previousRateRef = useRef(cached ? Number(cached.rate) : null);
   const timerRef = useRef(null);
@@ -107,23 +101,9 @@ export default function JewelleryPricingTable({ makingVal = "5250"}) {
 
   const caratOptions = ["24K", "22K", "20K", "18K", "16K"];
   const makingPercentOptions = ["3%", "3.50%", "5%", "10%", "12%"];
-
-  // NEW: show/hide making input when clicking the logo
   const [showMaking, setShowMaking] = useState(false);
 
-  // --- 4. Live Calculation (Nagpur Formula) ---
-  const getDerivedRates = useCallback(() => {
-    if (!rate) return { g10: 0, g1: 0 };
-    // derive using the currently-selected global carat
-    return deriveForCarat(carat, rate);
-  }, [rate, makingVal, carat]);
-
-
-  // We'll compute per-row rates below using the same logic. Helpers:
-  const caratIs24Global = () => false; // unused for per-row logic, kept to avoid breaking old references
-  const computeR10BasedOnCarat = (r, mk) => r; // placeholder
-
-  // Per-row derived rates function (uses `carat` per-row)
+  // --- Helper: compute derived rates (unchanged logic) ---
   const deriveForCarat = (carat, rateValue) => {
     if (!rateValue) return { g10: 0, g1: 0 };
     const makingNumber = Number(makingVal) || 5250;
@@ -136,9 +116,23 @@ export default function JewelleryPricingTable({ makingVal = "5250"}) {
     return { g10: r10, g1: r10 / 10 };
   };
 
+  // --- Effective rate selector: use override if present for this carat, otherwise API rate ---
+  const getEffectiveRateForCarat = (caratStr) => {
+    if (overrides && overrides.hasOwnProperty(caratStr)) {
+      const v = overrides[caratStr];
+      if (Number.isFinite(v)) return Number(v);
+    }
+    return rate;
+  };
+
+  // --- Top card derived rates use global carat + API rate (left unchanged) ---
+  const getDerivedRates = useCallback(() => {
+    if (!rate) return { g10: 0, g1: 0 };
+    return deriveForCarat(carat, rate);
+  }, [rate, carat, makingVal]);
   const { g1: current1gRate, g10: current10gRate } = getDerivedRates();
 
-  // --- 5. Core Fetch Function ---
+  // --- fetchRate (unchanged behaviour). We DO NOT clear overrides here.
   const fetchRate = useCallback(async (signal) => {
     if (!initializedRef.current) setLoading(true);
 
@@ -151,7 +145,7 @@ export default function JewelleryPricingTable({ makingVal = "5250"}) {
         if (previousRateRef.current !== null && newRate !== previousRateRef.current) {
           setBlinkDir(newRate > previousRateRef.current ? "up" : "down");
           setIsBlinking(true);
-          
+
           if (blinkTimeoutRef.current) clearTimeout(blinkTimeoutRef.current);
           blinkTimeoutRef.current = setTimeout(() => {
             setIsBlinking(false);
@@ -174,48 +168,28 @@ export default function JewelleryPricingTable({ makingVal = "5250"}) {
     }
   }, []);
 
-  // (Optional) you can wire up an interval like in your original code if desired.
-
-
-  // handleEnterKey with this function
+  // --- navigation/enter handler (unchanged) ---
   const handleEnterKey = (e) => {
-    // Allow action only for Enter or Shift (Shift key alone moves focus forward)
     if (e.key !== "Enter" && e.key !== "Shift") return;
-
     const active = document.activeElement;
-
-    // If Enter pressed while on a <select>, let browser handle it (same as before)
-    if (e.key === "Enter" && active && active.tagName === "SELECT") {
-      return;
-    }
-
-    // For both Enter (when not on select) and Shift, perform the same "move to next control" behavior
+    if (e.key === "Enter" && active && active.tagName === "SELECT") return;
     e.preventDefault();
-
     const table =
       (e.currentTarget && e.currentTarget.closest && e.currentTarget.closest("table")) ||
       document.querySelector("table");
     if (!table) return;
-
     const focusables = Array.from(
       table.querySelectorAll("tbody input, tbody select, tbody textarea, tbody button")
     ).filter((el) => !el.disabled && !(el.offsetParent === null));
-
     if (!focusables.length) return;
-
     let idx = focusables.indexOf(document.activeElement);
     if (idx === -1 && e.currentTarget) idx = focusables.indexOf(e.currentTarget);
-
     const next = focusables[(idx + 1) % focusables.length];
     if (!next) return;
-
-    // Delay to allow React to flush updates, then focus + open select if applicable
     setTimeout(() => {
       try {
         next.focus();
-
         if (next.tagName === "INPUT" && typeof next.select === "function") next.select();
-
         if (next.tagName === "SELECT") {
           if (typeof next.showPicker === "function") {
             try { next.showPicker(); } catch (err) { /* ignore */ }
@@ -225,65 +199,56 @@ export default function JewelleryPricingTable({ makingVal = "5250"}) {
             try { next.click(); } catch (err) { /* ignore */ }
           }
         }
-      } catch (err) {
-        // best-effort focusing — swallow errors
-      }
+      } catch (err) { }
     }, 0);
   };
 
-
-  // --- Rows helpers ---
+  // --- Rows helpers (unchanged logic) ---
   const updateRow = (rowIndex, updates) => {
     setRows((prev) => {
       const next = prev.map((r, i) => (i === rowIndex ? { ...r, ...updates } : r));
-      // Auto-add logic: if user entered weight into last row (and non-empty), append a fresh row
       const last = next[next.length - 1];
       if (last && last.weight !== "" && last.weight !== null && last.weight !== undefined) {
-        // Append only if last row is non-empty (weight filled)
         next.push(makeEmptyRow());
       }
       return next;
     });
   };
-
   const addRow = () => setRows((p) => [...p, makeEmptyRow()]);
   const removeRow = (rowIndex) => {
     setRows((prev) => {
-      if (prev.length <= 1) return prev; // keep at least 1 row
+      if (prev.length <= 1) return prev;
       const copy = prev.slice();
       copy.splice(rowIndex, 1);
       return copy;
     });
   };
-
   const resetRows = () => {
-    nextIdRef.current += 1000; // bump ids slightly to avoid reusing same ids (optional)
+    nextIdRef.current += 1000;
     setRows(makeRows(defaultRowCount));
   };
 
-  // --- Per-row price/GST/making charges calculations ---
+  // --- Calculations: use effective rate for each row (override-aware) ---
   const calculateRowPrice = (row, extraHallmark = 100) => {
     const w = parseFloat(row.weight) || 0;
-    const derived = deriveForCarat(row.carat, rate || 0);
+    const effRate = getEffectiveRateForCarat(row.carat) || 0;
+    const derived = deriveForCarat(row.carat, effRate);
     const oneGramRate = derived.g1 || 0;
     if (w === 0 || oneGramRate === 0) return 0;
     const makingPercentNumber = row.makingPercent ? parseFloat((String(row.makingPercent)).replace("%", "")) : 0;
     const m = (w * oneGramRate) * (makingPercentNumber / 100);
-    // the original code multiplied final result by 1.03 (maybe some markup); keep same
     return Math.round((w * oneGramRate + m + extraHallmark) * 1.03);
   };
-
   const calculateRowGST = (row) => {
     const w = parseFloat(row.weight) || 0;
-    const derived = deriveForCarat(row.carat, rate || 0);
+    const effRate = getEffectiveRateForCarat(row.carat) || 0;
+    const derived = deriveForCarat(row.carat, effRate);
     const oneGramRate = derived.g1 || 0;
     if (w === 0 || oneGramRate === 0) return 0;
     const makingPercentNumber = row.makingPercent ? parseFloat((String(row.makingPercent)).replace("%", "")) : 0;
     const m = (w * oneGramRate) * (makingPercentNumber / 100);
     return Math.round((w * oneGramRate + m + 100) * 0.03);
   };
-
-  // The original "Making Charges" cell displayed `makingVal * weight`. Keep same behavior (converted to Number).
   const calculateRowMakingCharges = (row) => {
     const w = parseFloat(row.weight) || 0;
     const making = Number(makingVal) || 0;        
@@ -292,25 +257,62 @@ export default function JewelleryPricingTable({ makingVal = "5250"}) {
     return Math.round(tenPercent);
   };
 
-  // --- Totals calculation (sums across rows) ---
-  // We include rows that have a numeric weight (empty weight is ignored).
+  // Totals (unchanged)
   const totalWeight = rows.reduce((sum, r) => {
     const w = parseFloat(r.weight);
     return sum + (isNaN(w) ? 0 : w);
   }, 0);
-
   const total100 = rows.reduce((sum, r) => sum + calculateRowPrice(r, 100), 0);
   const total150 = rows.reduce((sum, r) => sum + calculateRowPrice(r, 150), 0);
   const totalGST = rows.reduce((sum, r) => sum + calculateRowGST(r), 0);
   const totalMakingCharges = rows.reduce((sum, r) => sum + calculateRowMakingCharges(r), 0);
 
-  // --- Dynamic UI Logic ---
+  // Blink class (unchanged)
   let blinkClass = "border-neutral-700 bg-neutral-800/50";
   if (isBlinking) {
     blinkClass = blinkDir === "up" 
       ? "bg-green-500/20 border-green-500 animate-pulse" 
       : "bg-red-500/20 border-red-500 animate-pulse";
   }
+
+  // --- Rate input change handler: set/remove per-carat override ---
+  const onRateInputChangeForCarat = (caratStr, rawValue) => {
+    // sanitize (remove commas etc)
+    const sanitized = String(rawValue).replace(/,/g, "").trim();
+    if (sanitized === "") {
+      // remove override -> revert to API rate
+      setOverrides((prev) => {
+        if (!prev || !prev.hasOwnProperty(caratStr)) return prev;
+        const copy = { ...prev };
+        delete copy[caratStr];
+        return copy;
+      });
+      return;
+    }
+    const parsed = parseFloat(sanitized);
+    if (Number.isFinite(parsed)) {
+      setOverrides((prev) => ({ ...(prev || {}), [caratStr]: parsed }));
+    } else {
+      // not a valid number — remove override for safety
+      setOverrides((prev) => {
+        if (!prev || !prev.hasOwnProperty(caratStr)) return prev;
+        const copy = { ...prev };
+        delete copy[caratStr];
+        return copy;
+      });
+    }
+  };
+
+  // Helper to get the display string for the input (no commas, clear decimals when needed)
+  const inputDisplayFor = (caratStr, fallback) => {
+    if (overrides && overrides.hasOwnProperty(caratStr)) {
+      const v = overrides[caratStr];
+      return (Number.isFinite(v) ? String(v) : "");
+    }
+    if (fallback === 0 || fallback === null || fallback === undefined) return "";
+    // show 2 decimals if fractional, else integer
+    return Number(fallback) % 1 === 0 ? String(Math.round(Number(fallback))) : String(Number(fallback).toFixed(2));
+  };
 
   return (
     <div className="p-6 mt-8 bg-gray-900/60 text-white rounded-2xl shadow-xl max-w-5xl mx-auto space-y-6 border border-neutral-700">
@@ -347,7 +349,8 @@ export default function JewelleryPricingTable({ makingVal = "5250"}) {
           <div className="space-x-2">
             <button onClick={addRow} className="px-3 py-1 bg-neutral-700 rounded">Add Row</button>
             <button onClick={resetRows} className="px-3 py-1 bg-red-700 rounded font-bold active:scale-95">Reset Rows</button>
-            <button onClick={() => fetchRate()} className="px-3 py-1 bg-amber-500 text-neutral-900 rounded font-bold active:scale-95">
+            {/* Refresh button now clears per-carat overrides then fetches API rate */}
+            <button onClick={() => { setOverrides({}); fetchRate(); }} className="px-3 py-1 bg-amber-500 text-neutral-900 rounded font-bold active:scale-95">
               {loading ? "Updating..." : "Refresh Rate"}
             </button>
             <button className="px-3 py-1 bg-red-700 rounded font-bold active:scale-95" onClick={() => setShowMaking((prev) => !prev)}
@@ -358,10 +361,10 @@ export default function JewelleryPricingTable({ makingVal = "5250"}) {
                     e.preventDefault();
                     setShowMaking((prev) => !prev);
                   }
-                  }}
+                }}
                 title="Toggle Making input"
                 aria-pressed={showMaking}>
-                  Add MC
+                Add MC
             </button>
           </div>
         </div>
@@ -379,19 +382,21 @@ export default function JewelleryPricingTable({ makingVal = "5250"}) {
                 <th className="px-4 py-3 text-amber-300 font-bold border-b border-amber-700">Total (+150 Rs Hallmark)</th>
                 <th className="px-4 py-3 text-amber-300 font-bold border-b border-amber-700">GST (3%)</th>
                 {showMaking && (
-                <th className="px-4 py-3 text-amber-300 font-bold border-b border-amber-700">Making Charges</th>
+                  <th className="px-4 py-3 text-amber-300 font-bold border-b border-amber-700">Making Charges</th>
                 )}
-
               </tr>
             </thead>
             <tbody className="divide-y divide-neutral-800">
               {rows.map((row, idx) => {
-                const derived = deriveForCarat(row.carat, rate || 0);
+                // Use effective rate (override if present) for calculations and display
+                const effRate = getEffectiveRateForCarat(row.carat) || 0;
+                const derived = deriveForCarat(row.carat, effRate);
                 const perGram = derived.g1 || 0;
                 const total100 = calculateRowPrice(row, 100);
                 const total150 = calculateRowPrice(row, 150);
                 const gst = calculateRowGST(row);
                 const makingCharges = calculateRowMakingCharges(row);
+
                 return (
                   <tr key={row.id} className="hover:bg-gray-800/60 transition-colors">
                     <td className="px-4 py-3 font-medium text-amber-100 border-b border-amber-800">{idx + 1}</td>
@@ -410,31 +415,47 @@ export default function JewelleryPricingTable({ makingVal = "5250"}) {
                     </td>
 
                     <td className="px-4 py-3 font-medium text-amber-100 border-b border-amber-800">
-                      <select value={row.carat}  
-                      onChange={(e) => {
-                        const v = e.target.value;
-                        updateRow(idx, { carat: v });
-                        setCarat(v);           // <-- update global displayed carat
-                      }}
-                      onKeyDown={handleEnterKey}  
-                      className="w-16 p-1 rounded bg-neutral-800 border border-neutral-600 text-[15px]">
+                      <select value={row.carat}
+                        onChange={(e) => {
+                          const v = e.target.value;
+                          updateRow(idx, { carat: v });
+                          setCarat(v);
+                        }}
+                        onKeyDown={handleEnterKey}
+                        className="w-16 p-1 rounded bg-neutral-800 border border-neutral-600 text-[15px]">
                         {caratOptions.map(c => <option key={c} value={c}>{c}</option>)}
                       </select>
                     </td>
 
+                    {/* Rate/gm cell: input that sets per-carat override immediately */}
                     <td className={`px-4 py-3 font-bold transition-colors border-b border-amber-800 ${isBlinking ? 'text-amber-400' : 'text-amber-200'}`}>
-                      ₹{fmtInt(perGram)}
+                      <div className="flex items-center space-x-2">
+                        <span>₹</span>
+                        <input
+                          type="text"
+                          inputMode="decimal"
+                          pattern="[0-9]*[.,]?[0-9]*"
+                          // show override value if present else show derived perGram
+                          value={inputDisplayFor(row.carat, perGram)}
+                          onChange={(e) => {
+                            onRateInputChangeForCarat(row.carat, e.target.value);
+                          }}
+                          onKeyDown={handleEnterKey}
+                          className="w-20 p-1 rounded bg-neutral-800 border border-neutral-600 text-[15px] outline-none"
+                          aria-label={`Rate per gram for ${row.carat}`}
+                        />
+                      </div>
                     </td>
-
 
                     <td className="px-4 py-3 font-medium text-amber-100 border-b border-amber-800">
                       <select value={row.makingPercent} onChange={(e) => updateRow(idx, { makingPercent: e.target.value })}
-                        onKeyDown={handleEnterKey}    
+                        onKeyDown={handleEnterKey}
                         className="w-16 p-1 rounded bg-neutral-800 border border-neutral-600 text-[15px]">
                         <option value="">%</option>
                         {makingPercentOptions.map((mp) => <option key={mp} value={mp}>{mp}</option>)}
                       </select>
                     </td>
+
                     <td className="px-4 py-3 border-b border-amber-800">
                       {total100 > 0 ? (
                         <span
@@ -449,6 +470,7 @@ export default function JewelleryPricingTable({ makingVal = "5250"}) {
                         <span className="text-neutral-500">—</span>
                       )}
                     </td>
+
                     <td className="px-4 py-3 font-medium text-amber-100 border-b border-amber-800">
                       {total150 > 0 ? (
                         <span className="inline-block min-w-[90px] text-center">₹{fmtInt(total150)}</span>
@@ -456,6 +478,7 @@ export default function JewelleryPricingTable({ makingVal = "5250"}) {
                         <span className="text-neutral-500">—</span>
                       )}
                     </td>
+
                     <td className="px-4 py-3 font-medium text-amber-100 border-b border-amber-800">
                       {gst > 0 ? (
                         <span className="inline-block min-w-[90px] text-center">₹{fmtInt(gst)}</span>
@@ -463,8 +486,9 @@ export default function JewelleryPricingTable({ makingVal = "5250"}) {
                         <span className="text-neutral-500">—</span>
                       )}
                     </td>
+
                     {showMaking && (
-                    <td className="px-4 py-3 font-medium text-amber-100 border-b border-amber-800">₹{fmtInt(makingCharges)}</td>
+                      <td className="px-4 py-3 font-medium text-amber-100 border-b border-amber-800">₹{fmtInt(makingCharges)}</td>
                     )}
 
                   </tr>
@@ -472,14 +496,13 @@ export default function JewelleryPricingTable({ makingVal = "5250"}) {
               })}
             </tbody>
 
-            {/* Totals row: remains at the end even when rows are added */}
             <tfoot>
               <tr className="bg-gray-900/60">
                 <td className="px-4 py-3 font-bold text-amber-100 border-t border-amber-800">Total</td>
                 <td className="px-4 py-3 font-bold text-amber-100 border-t border-amber-800">{fmtWeight(totalWeight)}</td>
-                <td className="px-4 py-3 text-amber-100 border-t border-amber-800">{/* carat column intentionally blank */}</td>
-                <td className="px-4 py-3 text-amber-100 border-t border-amber-800">{/* rate/gm not applicable */}—</td>
-                <td className="px-4 py-3 text-amber-100 border-t border-amber-800">{/* making % not applicable */}</td>
+                <td className="px-4 py-3 text-amber-100 border-t border-amber-800"></td>
+                <td className="px-4 py-3 text-amber-100 border-t border-amber-800">—</td>
+                <td className="px-4 py-3 text-amber-100 border-t border-amber-800"></td>
                 <td className="px-4 py-3 border-t border-amber-800">
                   {total100 > 0 ? (
                     <span className="inline-block min-w-[90px] text-center
@@ -514,7 +537,6 @@ export default function JewelleryPricingTable({ makingVal = "5250"}) {
           </table>
         </div>
       </div>
-
     </div>
   );
 }
