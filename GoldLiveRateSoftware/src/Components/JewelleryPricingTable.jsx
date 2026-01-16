@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback } from "react";
+import React, { useState, useRef, useCallback } from "react";
 
 // ---  (unchanged constants & helpers) ---
 const ENDPOINT = "https://bcast.sagarjewellers.co.in:7768/VOTSBroadcastStreaming/Services/xml/GetLiveRateByTemplateID/sagar?_=1761132425086";
@@ -71,7 +71,7 @@ export default function JewelleryPricingTable({ makingVal = "5250" }) {
   };
   const cached = getCachedData();
 
-  // --- 2. States (added overrides) ---
+  // --- states ---
   const [rate, setRate] = useState(cached ? Number(cached.rate) : null);
   const [loading, setLoading] = useState(!cached);
   const [initialized, setInitialized] = useState(Boolean(cached));
@@ -87,11 +87,11 @@ export default function JewelleryPricingTable({ makingVal = "5250" }) {
   const [isBlinking, setIsBlinking] = useState(false);
   const [blinkDir, setBlinkDir] = useState(null);
 
-  // overrides: per-carat user-input rate/gm (applies to all rows with that carat)
-  // key: carat string ("22K"), value: numeric rate/gm
+  // IMPORTANT: overrides now store **per-gram** values (what user types into Rate/gm)
+  // example: { "22K": 5432.5 }
   const [overrides, setOverrides] = useState({});
 
-  // --- refs ---
+  // refs
   const initializedRef = useRef(Boolean(cached));
   const previousRateRef = useRef(cached ? Number(cached.rate) : null);
   const timerRef = useRef(null);
@@ -103,7 +103,7 @@ export default function JewelleryPricingTable({ makingVal = "5250" }) {
   const makingPercentOptions = ["3%", "3.50%", "5%", "10%", "12%"];
   const [showMaking, setShowMaking] = useState(false);
 
-  // --- Helper: compute derived rates (unchanged logic) ---
+  // derive (same as before)
   const deriveForCarat = (carat, rateValue) => {
     if (!rateValue) return { g10: 0, g1: 0 };
     const makingNumber = Number(makingVal) || 5250;
@@ -116,23 +116,25 @@ export default function JewelleryPricingTable({ makingVal = "5250" }) {
     return { g10: r10, g1: r10 / 10 };
   };
 
-  // --- Effective rate selector: use override if present for this carat, otherwise API rate ---
-  const getEffectiveRateForCarat = (caratStr) => {
+  // get per-gram value: if user override exists -> use that (it is per-gram). Otherwise compute via deriveForCarat using API 'rate'.
+  const getEffectivePerGramForCarat = (caratStr) => {
     if (overrides && overrides.hasOwnProperty(caratStr)) {
       const v = overrides[caratStr];
       if (Number.isFinite(v)) return Number(v);
     }
-    return rate;
+    if (!rate) return 0;
+    const d = deriveForCarat(caratStr, rate);
+    return d.g1 || 0;
   };
 
-  // --- Top card derived rates use global carat + API rate (left unchanged) ---
+  // top card: still shows API-driven derived values (unchanged)
   const getDerivedRates = useCallback(() => {
     if (!rate) return { g10: 0, g1: 0 };
     return deriveForCarat(carat, rate);
   }, [rate, carat, makingVal]);
   const { g1: current1gRate, g10: current10gRate } = getDerivedRates();
 
-  // --- fetchRate (unchanged behaviour). We DO NOT clear overrides here.
+  // fetchRate (unchanged), does NOT touch overrides (Refresh button clears overrides explicitly)
   const fetchRate = useCallback(async (signal) => {
     if (!initializedRef.current) setLoading(true);
 
@@ -168,7 +170,7 @@ export default function JewelleryPricingTable({ makingVal = "5250" }) {
     }
   }, []);
 
-  // --- navigation/enter handler (unchanged) ---
+  // enter key handler (unchanged)
   const handleEnterKey = (e) => {
     if (e.key !== "Enter" && e.key !== "Shift") return;
     const active = document.activeElement;
@@ -203,7 +205,7 @@ export default function JewelleryPricingTable({ makingVal = "5250" }) {
     }, 0);
   };
 
-  // --- Rows helpers (unchanged logic) ---
+  // row helpers (unchanged)
   const updateRow = (rowIndex, updates) => {
     setRows((prev) => {
       const next = prev.map((r, i) => (i === rowIndex ? { ...r, ...updates } : r));
@@ -228,36 +230,32 @@ export default function JewelleryPricingTable({ makingVal = "5250" }) {
     setRows(makeRows(defaultRowCount));
   };
 
-  // --- Calculations: use effective rate for each row (override-aware) ---
+  // --- Calculations now use getEffectivePerGramForCarat (override-aware) ---
   const calculateRowPrice = (row, extraHallmark = 100) => {
     const w = parseFloat(row.weight) || 0;
-    const effRate = getEffectiveRateForCarat(row.carat) || 0;
-    const derived = deriveForCarat(row.carat, effRate);
-    const oneGramRate = derived.g1 || 0;
-    if (w === 0 || oneGramRate === 0) return 0;
+    const perGram = getEffectivePerGramForCarat(row.carat) || 0; // <-- use per-gram directly
+    if (w === 0 || perGram === 0) return 0;
     const makingPercentNumber = row.makingPercent ? parseFloat((String(row.makingPercent)).replace("%", "")) : 0;
-    const m = (w * oneGramRate) * (makingPercentNumber / 100);
-    return Math.round((w * oneGramRate + m + extraHallmark) * 1.03);
+    const m = (w * perGram) * (makingPercentNumber / 100);
+    return Math.round((w * perGram + m + extraHallmark) * 1.03);
   };
   const calculateRowGST = (row) => {
     const w = parseFloat(row.weight) || 0;
-    const effRate = getEffectiveRateForCarat(row.carat) || 0;
-    const derived = deriveForCarat(row.carat, effRate);
-    const oneGramRate = derived.g1 || 0;
-    if (w === 0 || oneGramRate === 0) return 0;
+    const perGram = getEffectivePerGramForCarat(row.carat) || 0;
+    if (w === 0 || perGram === 0) return 0;
     const makingPercentNumber = row.makingPercent ? parseFloat((String(row.makingPercent)).replace("%", "")) : 0;
-    const m = (w * oneGramRate) * (makingPercentNumber / 100);
-    return Math.round((w * oneGramRate + m + 100) * 0.03);
+    const m = (w * perGram) * (makingPercentNumber / 100);
+    return Math.round((w * perGram + m + 100) * 0.03);
   };
   const calculateRowMakingCharges = (row) => {
     const w = parseFloat(row.weight) || 0;
-    const making = Number(makingVal) || 0;        
-    const total = making * w;                    
-    const tenPercent = total * 0.10;             
+    const making = Number(makingVal) || 0;
+    const total = making * w;
+    const tenPercent = total * 0.10;
     return Math.round(tenPercent);
   };
 
-  // Totals (unchanged)
+  // totals
   const totalWeight = rows.reduce((sum, r) => {
     const w = parseFloat(r.weight);
     return sum + (isNaN(w) ? 0 : w);
@@ -267,20 +265,18 @@ export default function JewelleryPricingTable({ makingVal = "5250" }) {
   const totalGST = rows.reduce((sum, r) => sum + calculateRowGST(r), 0);
   const totalMakingCharges = rows.reduce((sum, r) => sum + calculateRowMakingCharges(r), 0);
 
-  // Blink class (unchanged)
+  // blinking UI (unchanged)
   let blinkClass = "border-neutral-700 bg-neutral-800/50";
   if (isBlinking) {
-    blinkClass = blinkDir === "up" 
-      ? "bg-green-500/20 border-green-500 animate-pulse" 
+    blinkClass = blinkDir === "up"
+      ? "bg-green-500/20 border-green-500 animate-pulse"
       : "bg-red-500/20 border-red-500 animate-pulse";
   }
 
-  // --- Rate input change handler: set/remove per-carat override ---
+  // Rate input handler: store per-gram value as an integer (rounded)
   const onRateInputChangeForCarat = (caratStr, rawValue) => {
-    // sanitize (remove commas etc)
     const sanitized = String(rawValue).replace(/,/g, "").trim();
     if (sanitized === "") {
-      // remove override -> revert to API rate
       setOverrides((prev) => {
         if (!prev || !prev.hasOwnProperty(caratStr)) return prev;
         const copy = { ...prev };
@@ -291,9 +287,9 @@ export default function JewelleryPricingTable({ makingVal = "5250" }) {
     }
     const parsed = parseFloat(sanitized);
     if (Number.isFinite(parsed)) {
-      setOverrides((prev) => ({ ...(prev || {}), [caratStr]: parsed }));
+      const rounded = Math.round(parsed);             // <-- round here
+      setOverrides((prev) => ({ ...(prev || {}), [caratStr]: rounded }));
     } else {
-      // not a valid number — remove override for safety
       setOverrides((prev) => {
         if (!prev || !prev.hasOwnProperty(caratStr)) return prev;
         const copy = { ...prev };
@@ -303,15 +299,15 @@ export default function JewelleryPricingTable({ makingVal = "5250" }) {
     }
   };
 
-  // Helper to get the display string for the input (no commas, clear decimals when needed)
-  const inputDisplayFor = (caratStr, fallback) => {
+  // input display: always show integer (rounded) — for override or derived
+  const inputDisplayFor = (caratStr, derivedPerGram) => {
     if (overrides && overrides.hasOwnProperty(caratStr)) {
       const v = overrides[caratStr];
-      return (Number.isFinite(v) ? String(v) : "");
+      return Number.isFinite(v) ? String(Math.round(Number(v))) : "";
     }
-    if (fallback === 0 || fallback === null || fallback === undefined) return "";
-    // show 2 decimals if fractional, else integer
-    return Number(fallback) % 1 === 0 ? String(Math.round(Number(fallback))) : String(Number(fallback).toFixed(2));
+    if (derivedPerGram === 0 || derivedPerGram === null || derivedPerGram === undefined) return "";
+    // always round derived per-gram to nearest integer for display
+    return String(Math.round(Number(derivedPerGram)));
   };
 
   return (
@@ -349,7 +345,7 @@ export default function JewelleryPricingTable({ makingVal = "5250" }) {
           <div className="space-x-2">
             <button onClick={addRow} className="px-3 py-1 bg-neutral-700 rounded">Add Row</button>
             <button onClick={resetRows} className="px-3 py-1 bg-red-700 rounded font-bold active:scale-95">Reset Rows</button>
-            {/* Refresh button now clears per-carat overrides then fetches API rate */}
+            {/* Refresh clears overrides then fetches API */}
             <button onClick={() => { setOverrides({}); fetchRate(); }} className="px-3 py-1 bg-amber-500 text-neutral-900 rounded font-bold active:scale-95">
               {loading ? "Updating..." : "Refresh Rate"}
             </button>
@@ -388,10 +384,10 @@ export default function JewelleryPricingTable({ makingVal = "5250" }) {
             </thead>
             <tbody className="divide-y divide-neutral-800">
               {rows.map((row, idx) => {
-                // Use effective rate (override if present) for calculations and display
-                const effRate = getEffectiveRateForCarat(row.carat) || 0;
-                const derived = deriveForCarat(row.carat, effRate);
-                const perGram = derived.g1 || 0;
+                // per-gram to display: either override (per-gram) or derived per-gram from API
+                const derivedPerGram = deriveForCarat(row.carat, rate).g1 || 0;
+                const perGram = getEffectivePerGramForCarat(row.carat) || 0;
+
                 const total100 = calculateRowPrice(row, 100);
                 const total150 = calculateRowPrice(row, 150);
                 const gst = calculateRowGST(row);
@@ -427,7 +423,7 @@ export default function JewelleryPricingTable({ makingVal = "5250" }) {
                       </select>
                     </td>
 
-                    {/* Rate/gm cell: input that sets per-carat override immediately */}
+                    {/* Rate/gm cell */}
                     <td className={`px-4 py-3 font-bold transition-colors border-b border-amber-800 ${isBlinking ? 'text-amber-400' : 'text-amber-200'}`}>
                       <div className="flex items-center space-x-2">
                         <span>₹</span>
@@ -435,8 +431,7 @@ export default function JewelleryPricingTable({ makingVal = "5250" }) {
                           type="text"
                           inputMode="decimal"
                           pattern="[0-9]*[.,]?[0-9]*"
-                          // show override value if present else show derived perGram
-                          value={inputDisplayFor(row.carat, perGram)}
+                          value={inputDisplayFor(row.carat, derivedPerGram)}
                           onChange={(e) => {
                             onRateInputChangeForCarat(row.carat, e.target.value);
                           }}
