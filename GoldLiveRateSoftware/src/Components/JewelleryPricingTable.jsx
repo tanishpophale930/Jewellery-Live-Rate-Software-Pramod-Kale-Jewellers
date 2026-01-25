@@ -1,4 +1,4 @@
-import React, { useState, useRef, useCallback } from "react";
+import React, { useState, useRef, useCallback, useEffect } from "react";
 
 // ---  (unchanged constants & helpers) ---
 const ENDPOINT = "https://bcast.sagarjewellers.co.in:7768/VOTSBroadcastStreaming/Services/xml/GetLiveRateByTemplateID/sagar?_=1761132425086";
@@ -134,7 +134,7 @@ export default function JewelleryPricingTable({ makingVal = "5250" }) {
   }, [rate, carat, makingVal]);
   const { g1: current1gRate, g10: current10gRate } = getDerivedRates();
 
-  // fetchRate (unchanged), does NOT touch overrides (Refresh button clears overrides explicitly)
+  // fetchRate (unchanged logic) - accepts optional signal
   const fetchRate = useCallback(async (signal) => {
     if (!initializedRef.current) setLoading(true);
 
@@ -159,7 +159,11 @@ export default function JewelleryPricingTable({ makingVal = "5250" }) {
         previousRateRef.current = newRate;
         const now = new Date();
         setLastUpdated(now);
-        localStorage.setItem(LS_LAST_RATE_KEY, JSON.stringify({ rate: newRate, ts: now.getTime() }));
+        try {
+          localStorage.setItem(LS_LAST_RATE_KEY, JSON.stringify({ rate: newRate, ts: now.getTime() }));
+        } catch (e) {
+          // ignore storage errors
+        }
         setInitialized(true);
         initializedRef.current = true;
       }
@@ -310,6 +314,27 @@ export default function JewelleryPricingTable({ makingVal = "5250" }) {
     return String(Math.round(Number(derivedPerGram)));
   };
 
+  // --- NEW (minimal): fetch fresh rate once on mount (no periodic polling) ---
+  useEffect(() => {
+    // create controller for this mount-fetch so we can abort on unmount
+    controllerRef.current = new AbortController();
+    fetchRate(controllerRef.current.signal);
+
+    return () => {
+      if (controllerRef.current) {
+        try { controllerRef.current.abort(); } catch (e) {}
+        controllerRef.current = null;
+      }
+      if (blinkTimeoutRef.current) {
+        clearTimeout(blinkTimeoutRef.current);
+        blinkTimeoutRef.current = null;
+      }
+    };
+    // run once on mount only
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Rate UI & table rendering (unchanged)
   return (
     <div className="p-6 mt-8 bg-gray-900/60 text-white rounded-2xl shadow-xl max-w-5xl mx-auto space-y-6 border border-neutral-700">
 
