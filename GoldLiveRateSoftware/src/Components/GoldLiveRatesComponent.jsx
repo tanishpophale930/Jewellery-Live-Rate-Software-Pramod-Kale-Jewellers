@@ -142,7 +142,7 @@ export default function GoldLiveRatesComponent({
   );
 
   // Making input
-  const [makingVal, setMakingVal] = useState("5250");
+  const [makingVal, setMakingVal] = useState("6000");
 
   // countdown
   const [remaining, setRemaining] = useState(Math.ceil(refreshMs / 1000));
@@ -723,7 +723,7 @@ export default function GoldLiveRatesComponent({
   const makingNumber = (function () {
     const n = Number(makingVal);
     if (Number.isFinite(n) && n >= 0) return n;
-    return 5250;
+    return 6000;
   })();
 
   // build derived table values (unchanged)
@@ -1796,7 +1796,7 @@ export default function GoldLiveRatesComponent({
                     value={makingVal}
                     onChange={(e) => setMakingVal(e.target.value)}
                     className="w-20 text-right text-sm px-2 py-1 rounded-md bg-gray-950 border border-amber-800 text-amber-100"
-                    placeholder="5250"
+                    placeholder="6000"
                     inputMode="numeric"
                     aria-label="Making charge"
                   />

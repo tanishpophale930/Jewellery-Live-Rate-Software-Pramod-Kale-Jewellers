@@ -57,7 +57,7 @@ function parseGoldRate(text) {
   return Number(extracted);
 }
 
-export default function JewelleryPricingTable({ makingVal = "5250" }) {
+export default function JewelleryPricingTable({ makingVal = "6000" }) {
   // --- cached data load (unchanged) ---
   const getCachedData = () => {
     try {
@@ -106,7 +106,7 @@ export default function JewelleryPricingTable({ makingVal = "5250" }) {
   // derive (same as before)
   const deriveForCarat = (carat, rateValue) => {
     if (!rateValue) return { g10: 0, g1: 0 };
-    const makingNumber = Number(makingVal) || 5250;
+    const makingNumber = Number(makingVal) || 6000;
     let r10 = 0;
     if (carat === "24K") r10 = rateValue;
     else if (carat === "22K") r10 = (rateValue + makingNumber) / 1.1;
