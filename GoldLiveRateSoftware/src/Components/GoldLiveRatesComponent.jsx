@@ -753,7 +753,7 @@ export default function GoldLiveRatesComponent({
   const rate20K10gm = rate ? rate / 1.1 : null;
   const rate18K10gm = rate ? (0.95 * rate) / 1.1 : null;
   const rate16K10gm = rate ? (0.85 * rate) / 1.1 : null;
-  const goldcoin = Number.isFinite(rate) ? rate / 10 + 100 : null;
+  const goldcoin = Number.isFinite(rate) ? rate / 10 + 150 : null;
 
   // format utilities (unchanged)
   function fmtInt(val) {
