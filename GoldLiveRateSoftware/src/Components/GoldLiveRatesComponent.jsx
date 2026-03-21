@@ -1150,7 +1150,12 @@ export default function GoldLiveRatesComponent({
     return (
       <div className="w-full flex flex-col items-center justify-center">
         <div className="text-xl text-gray-800 font-bold">{title}</div>
-        <div className="mt-2 text-4xl md:text-5xl font-extrabold text-rose-900 drop-shadow-sm">
+        <div className={
+          title === "Dollar"
+            ? "mt-3.5 text-3xl md:text-4xl font-extrabold text-rose-900 drop-shadow-sm"
+            : "mt-2 text-4xl md:text-5xl font-extrabold text-rose-900 drop-shadow-sm"
+        }
+        >
           {isLoading ? (
             "—"
           ) : (
