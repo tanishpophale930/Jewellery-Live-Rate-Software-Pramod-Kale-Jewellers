@@ -1154,7 +1154,11 @@ export default function GoldLiveRatesComponent({
           {isLoading ? (
             "—"
           ) : (
-            <span className={blinkClass}>{fmtInt(bigValue)}</span>
+            <span className={blinkClass}>
+              {title === "Dollar"
+                ? fmtDecimal(bigValue, 2)
+                : fmtInt(bigValue)}
+            </span>
           )}
         </div>
       </div>
