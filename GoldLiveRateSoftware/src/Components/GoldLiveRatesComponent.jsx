@@ -630,7 +630,7 @@ export default function GoldLiveRatesComponent({
 
   async function fetchRetail995Rate(signal) {
     try {
-      const res = await fetch("https://6km2mfsd-8081.inc1.devtunnels.ms/api/prk/gold/retail-995", {
+      const res = await fetch("https://jewellery-live-rate-software-pramod-kale.onrender.com/api/prk/gold/retail-995", {
         signal,
       });
 
