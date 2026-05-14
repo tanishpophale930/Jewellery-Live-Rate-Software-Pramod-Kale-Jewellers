@@ -76,15 +76,20 @@ export default function GoldLiveRatesComponent({
 
   const [silverRate, setSilverRate] = useState(null);
   const [spotGoldRate, setSpotGoldRate] = useState(null);
+  const [retail995Rate, setRetail995Rate] = useState(null);
   const [blinkGoldCoinDir, setBlinkGoldCoinDir] = useState(null);
   const [blinkDollarDir, setBlinfkDollarDir] = useState(null);
+  const [blinkRetail995Dir, setBlinkRetail995Dir] = useState(null);
 
   // --- NEW: dollar state ---
   const [dollarRate, setDollarRate] = useState(null);
   const dollarControllerRef = useRef(null);
   const dollarIntervalRef = useRef(null);
+  const retailControllerRef = useRef(null);
+  const retailIntervalRef = useRef(null);
   const prevGoldCoinRef = useRef(null);
   const prevDollarRef = useRef(null);
+  const prevRetail995Ref = useRef(null);
   const DOLLAR_POLL_MS = 10000; // 10 seconds polling
 
   // ---------- NEW: live/connection indicator state & refs ----------
@@ -94,6 +99,7 @@ export default function GoldLiveRatesComponent({
   const stalenessIntervalRef = useRef(null);
   const blinkTimeoutGoldCoinRef = useRef(null);
   const blinkTimeoutDollarRef = useRef(null);
+  const blinkTimeoutRetail995Ref = useRef(null);
   const LIVE_DISPLAY_MS = 3000; // how long to show "Live" after a change (kept, but status now relies on lastChange)
   // ------------------------------------------------------------------
 
@@ -132,6 +138,26 @@ export default function GoldLiveRatesComponent({
     }
     const fallback = after.match(/\d+(?:\.\d+)?/);
     return fallback ? fallback[0] : null;
+  }
+
+  function parseRetail995FromHtml(text) {
+    if (!text) return null;
+
+    const patterns = [
+      /"s":\s*\[0,\s*"GL995"\][\s\S]{0,220}?"a":\s*\[0,\s*(\d+(?:\.\d+)?)\]/i,
+      /RETAIL\s*995[\s\S]{0,260}?₹\s*([\d,]+(?:\.\d+)?)/i,
+    ];
+
+    for (const re of patterns) {
+      const m = String(text).match(re);
+      if (m && m[1]) {
+        const cleaned = String(m[1]).replace(/,/g, "");
+        const n = Number(cleaned);
+        if (Number.isFinite(n)) return n;
+      }
+    }
+
+    return null;
   }
 
   // refresh controls
@@ -602,7 +628,44 @@ export default function GoldLiveRatesComponent({
     }
   }
 
-  // --- NEW: fetch dollar (unchanged endpoint flow) ---
+  async function fetchRetail995Rate(signal) {
+    try {
+      const res = await fetch("https://6km2mfsd-8081.inc1.devtunnels.ms/api/prk/gold/retail-995", {
+        signal,
+      });
+
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+
+      const data = await res.json();
+      const val = Number(data?.retail995);
+
+      if (!Number.isFinite(val)) return;
+
+      const prevRetail = prevRetail995Ref.current;
+
+      if (
+        Number.isFinite(prevRetail) &&
+        Number.isFinite(val) &&
+        Number(val) !== Number(prevRetail)
+      ) {
+        setBlinkRetail995Dir(val > prevRetail ? "up" : "down");
+        if (blinkTimeoutRetail995Ref.current) {
+          clearTimeout(blinkTimeoutRetail995Ref.current);
+        }
+        blinkTimeoutRetail995Ref.current = setTimeout(
+          () => setBlinkRetail995Dir(null),
+          BLINK_MS
+        );
+      }
+
+      prevRetail995Ref.current = val;
+      setRetail995Rate(val);
+    } catch (err) {
+      if (err?.name === "AbortError") return;
+      setRetail995Rate(null);
+    }
+  }
+
   async function fetchDollar(signal) {
     try {
       const tryEndpoint = async (url) => {
@@ -877,6 +940,15 @@ export default function GoldLiveRatesComponent({
         fetchDollar(dollarControllerRef.current.signal);
       }, DOLLAR_POLL_MS);
 
+      retailControllerRef.current = new AbortController();
+      fetchRetail995Rate(retailControllerRef.current.signal);
+      if (retailIntervalRef.current) clearInterval(retailIntervalRef.current);
+      retailIntervalRef.current = setInterval(() => {
+        if (retailControllerRef.current) retailControllerRef.current.abort();
+        retailControllerRef.current = new AbortController();
+        fetchRetail995Rate(retailControllerRef.current.signal);
+      }, initialMs);
+
       return () => {
         if (controllerRef.current) controllerRef.current.abort();
         clearSchedules();
@@ -885,6 +957,12 @@ export default function GoldLiveRatesComponent({
         if (dollarIntervalRef.current) {
           clearInterval(dollarIntervalRef.current);
           dollarIntervalRef.current = null;
+        }
+
+        if (retailControllerRef.current) retailControllerRef.current.abort();
+        if (retailIntervalRef.current) {
+          clearInterval(retailIntervalRef.current);
+          retailIntervalRef.current = null;
         }
 
         if (liveTimeoutRef.current) {
@@ -934,6 +1012,19 @@ export default function GoldLiveRatesComponent({
     if (controllerRef.current) controllerRef.current.abort();
     controllerRef.current = new AbortController();
     fetchRate(controllerRef.current.signal);
+
+    if (retailControllerRef.current) retailControllerRef.current.abort();
+    if (retailIntervalRef.current) {
+      clearInterval(retailIntervalRef.current);
+      retailIntervalRef.current = null;
+    }
+    retailControllerRef.current = new AbortController();
+    fetchRetail995Rate(retailControllerRef.current.signal);
+    retailIntervalRef.current = setInterval(() => {
+      if (retailControllerRef.current) retailControllerRef.current.abort();
+      retailControllerRef.current = new AbortController();
+      fetchRetail995Rate(retailControllerRef.current.signal);
+    }, refreshMs);
   }, [refreshMs]);
 
   // staleness checker (reworked): decide Offline vs Live vs Stable
@@ -1006,7 +1097,7 @@ export default function GoldLiveRatesComponent({
 
   // ---------- Small presentational subcomponents ----------
   const RightCard = ({ children }) => (
-    <div className="w-full max-w-xl md:max-w-lg bg-gradient-to-r from-amber-500 via-amber-400 to-amber-300 rounded-2xl p-3 shadow-lg ring-1 ring-amber-900/30">
+    <div className="w-full max-w-full bg-gradient-to-r from-amber-500 via-amber-400 to-amber-300 rounded-2xl p-3 shadow-lg ring-1 ring-amber-900/30">
       <div className="bg-white/95 rounded-xl p-4 flex flex-col items-center justify-center min-h-[113px]">
         {children}
       </div>
@@ -1024,7 +1115,7 @@ export default function GoldLiveRatesComponent({
     const blinkClass =
       blink === "up" ? "blink-up" : blink === "down" ? "blink-down" : "";
     return (
-      <div className="w-full flex items-center justify-center">
+      <div className="w-full flex items-center justify-center ">
         <RightCard>
           <div className="w-full flex flex-col items-center">
             <div className="text-xl text-gray-800 font-bold">{title}</div>
@@ -1090,15 +1181,15 @@ export default function GoldLiveRatesComponent({
 
     return (
       <RightCard>
-        <div className="w-full flex flex-col items-center">
+        <div className="w-full flex flex-col items-center h-[225px]">
           <div className="text-2xl text-gray-800 font-bold">Silver</div>
 
           <div className="mt-3 w-full space-y-6">
-            <div className="bg-gradient-to-r from-amber-300 via-amber-300 to-amber-200 rounded-lg p-3 ring-1 ring-amber-900/10">
-              <div className="text-lg text-gray-800 font-bold">
+            <div className="bg-gradient-to-r from-amber-300 via-amber-300 to-amber-200 rounded-lg p-3 ring-1 ring-amber-900/10 h-[80px]">
+              <div className="text-md text-gray-800 font-bold">
                 1 gm <span className="text-sm font-medium">(+GST 3%)</span>
               </div>
-              <div className="mt-1 text-2xl md:text-3xl font-extrabold text-rose-900">
+              <div className=" text-2xl md:text-3xl font-extrabold text-rose-900">
                 {isLoading ? (
                   "—"
                 ) : (
@@ -1107,11 +1198,11 @@ export default function GoldLiveRatesComponent({
               </div>
             </div>
 
-            <div className="bg-gradient-to-r from-amber-300 via-amber-300 to-amber-200 rounded-lg p-3 ring-1 ring-amber-900/20">
-              <div className="text-lg text-gray-800 font-bold">
+            <div className="bg-gradient-to-r from-amber-300 via-amber-300 to-amber-200 rounded-lg p-3 ring-1 ring-amber-900/20 h-[80px]">
+              <div className="text-md text-gray-800 font-bold">
                 10 gm <span className="text-sm font-medium">(+GST 3%)</span>
               </div>
-              <div className="mt-1 text-2xl md:text-3xl font-extrabold text-rose-900">
+              <div className=" text-2xl md:text-3xl font-extrabold text-rose-900">
                 {isLoading ? (
                   "—"
                 ) : (
@@ -1120,6 +1211,7 @@ export default function GoldLiveRatesComponent({
               </div>
             </div>
 
+            {/**
             <div className="bg-gradient-to-r from-amber-300 via-amber-300 to-amber-200 rounded-lg p-3 shadow-inner ring-1 ring-amber-900/20">
               <div className="text-lg text-gray-800 font-bold">1 KG</div>
               <div className="mt-1 text-2xl md:text-3xl font-extrabold text-rose-900">
@@ -1130,6 +1222,7 @@ export default function GoldLiveRatesComponent({
                 )}
               </div>
             </div>
+             */}
           </div>
         </div>
       </RightCard>
@@ -1456,8 +1549,8 @@ export default function GoldLiveRatesComponent({
                 </div>
 
                 {/* 20K */}
-                <div className="bg-gradient-to-r from-amber-400 via-amber-400 to-amber-400 rounded-2xl p-2.5 shadow-lg ring-1 ring-amber-900/30">
-                  <div className="flex flex-col sm:flex-row gap-2.5">
+                <div className="bg-gradient-to-r from-amber-400 via-amber-400 to-amber-400 rounded-2xl p-2.5 shadow-lg ring-1 ring-amber-900/30 ">
+                  <div className="flex flex-col sm:flex-row gap-2.5 h-[120px]">
                     <div className="sm:w-1/2 bg-white/95 rounded-xl p-2 px-3 flex flex-col justify-center min-h-14 md:min-h-20">
                       <div className="text-md text-gray-800 font-semibold leading-tight">
                         {" "}
@@ -1628,8 +1721,14 @@ export default function GoldLiveRatesComponent({
               </div>
 
               {/* RIGHT */}
-              <div className="md:col-span-1 flex flex-col items-center justify-start gap-3.5">
-                <RightVerticalSilver loading={loading} rate1kg={silverRate} />
+              <div className="md:col-span-1 flex flex-col items-stretch justify-start gap-3.5 ">
+                <RightVerticalSilver loading={loading} rate1kg={silverRate}  />
+                <RightSingleStack
+                  title="Retail 99.50"
+                  bigValue={retail995Rate}
+                  loading={!Number.isFinite(retail995Rate)}
+                  blink={blinkRetail995Dir}
+                />
                 <RightSingleStack
                   title="Gold Coin"
                   bigValue={goldcoin}
